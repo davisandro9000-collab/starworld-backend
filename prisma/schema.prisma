@@ -1,0 +1,460 @@
+// prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")  // ← ADD THIS LINE
+}
+
+// ============================================
+// USERS & AUTH
+// ============================================
+
+model User {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username        String    @unique @db.VarChar(30)
+  email           String    @unique @db.VarChar(255)
+  passwordHash    String    @map("password_hash") @db.Text
+  displayName     String?   @map("display_name") @db.VarChar(100)
+  avatarUrl       String?   @map("avatar_url") @db.Text
+  tierId          String?   @map("tier_id") @db.Uuid
+  tier            Tier?     @relation(fields: [tierId], references: [id])
+  coinBalance     Int       @default(0) @map("coin_balance")
+  isBanned        Boolean   @default(false) @map("is_banned")
+  banReason       String?   @map("ban_reason") @db.Text
+  emailVerified   Boolean   @default(false) @map("email_verified")
+  referralCode    String    @unique @map("referral_code") @db.VarChar(12)
+  referredById    String?   @map("referred_by_id") @db.Uuid
+  referredBy      User?     @relation("UserReferrals", fields: [referredById], references: [id])
+  referrals       User[]    @relation("UserReferrals")
+  totalReferrals  Int       @default(0) @map("total_referrals")
+  payoutUnlocked  Boolean   @default(false) @map("payout_unlocked")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz
+
+  // Relations
+  refreshTokens          RefreshToken[]
+  deposits               Deposit[]
+  coinTransactions       CoinTransaction[]
+  gameSessions           GameSession[]
+  prizeRedemptions       PrizeRedemption[]
+  sentNotifications      UserNotification[]
+  ticketListingsAsSeller TicketExchange[] @relation("TicketExchangeSeller")
+  ticketListingsAsBuyer  TicketExchange[] @relation("TicketExchangeBuyer")
+  auctionBids            TicketAuctionBid[]
+  escrowEntries          CoinEscrow[]
+  referralEventsAsReferrer ReferralEvent[] @relation("Referrer")
+  referralEventsAsReferred ReferralEvent[] @relation("Referred")
+  ticketGameOffers       TicketGameOffer[]
+  ticketGameSessionsPlayer1 TicketGameSession[] @relation("Player1")
+  ticketGameSessionsPlayer2 TicketGameSession[] @relation("Player2")
+  ticketGameSessionsWinner  TicketGameSession[] @relation("Winner")
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  user       User     @relation(fields: [userId], references: [id])
+  tokenHash  String   @map("token_hash") @db.Text
+  expiresAt  DateTime @map("expires_at") @db.Timestamptz
+  revoked    Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("refresh_tokens")
+}
+
+model AdminUser {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  username      String   @unique @db.VarChar(30)
+  email         String   @unique @db.VarChar(255)
+  passwordHash  String   @map("password_hash") @db.Text
+  role          String   @default("moderator") @db.VarChar(20)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  depositsVerified Deposit[]    @relation("VerifiedBy")
+  announcements   Announcement[]
+  auditLogs       AuditLog[]
+
+  @@map("admin_users")
+}
+
+// ============================================
+// MEMBERSHIP TIERS
+// ============================================
+
+model Tier {
+  id                     String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                   String   @unique @db.VarChar(20)
+  name                   String   @db.VarChar(50)
+  colorHex               String   @map("color_hex") @db.VarChar(7)
+  minDepositUsd          Decimal  @map("min_deposit_usd") @db.Decimal(10,2)
+  requiredReferrals      Int      @default(0) @map("required_referrals")
+  spinWinRate            Int      @default(30) @map("spin_win_rate")
+  gameWinRate            Int      @default(30) @map("game_win_rate")
+  coinMultiplier         Decimal  @default(1.0) @map("coin_multiplier") @db.Decimal(4,2)
+  referralPayoutCount    Int      @default(0) @map("referral_payout_count")
+  eligibleForGrandPrize  Boolean  @default(false) @map("eligible_for_grand_prize")
+  sortOrder              Int      @default(0) @map("sort_order")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  users         User[]
+  gameSessions  GameSession[]
+
+  @@map("tiers")
+}
+
+// ============================================
+// DEPOSITS & COINS
+// ============================================
+
+model Deposit {
+  id                  String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId              String     @map("user_id") @db.Uuid
+  user                User       @relation(fields: [userId], references: [id])
+  method              String     @db.VarChar(20) // 'crypto' | 'gift_card'
+  cryptoCurrency      String?    @map("crypto_currency") @db.VarChar(10)
+  cryptoAmount        Decimal?   @map("crypto_amount") @db.Decimal(20,8)
+  walletAddressUsed   String?    @map("wallet_address_used") @db.Text
+  txHash              String?    @map("tx_hash") @db.Text
+  giftCardBrand       String?    @map("gift_card_brand") @db.VarChar(50)
+  giftCardDigits      String?    @map("gift_card_digits") @db.Text
+  giftCardAmountUsd   Decimal?   @map("gift_card_amount_usd") @db.Decimal(10,2)
+  usdValue            Decimal?   @map("usd_value") @db.Decimal(10,2)
+  coinsToAward        Int?       @map("coins_to_award")
+  status              String     @default("pending") @db.VarChar(20) // pending, credited, rejected
+  verifiedById        String?    @map("verified_by_id") @db.Uuid
+  verifiedBy          AdminUser? @relation("VerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt          DateTime?  @map("verified_at") @db.Timestamptz
+  rejectionReason     String?    @map("rejection_reason") @db.Text
+  adminNotified       Boolean    @default(false) @map("admin_notified")
+  idempotencyKey      String?    @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt           DateTime   @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime   @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("deposits")
+}
+
+model CoinTransaction {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @map("user_id") @db.Uuid
+  user           User     @relation(fields: [userId], references: [id])
+  amount         Int      // positive = credit, negative = debit
+  balanceAfter   Int      @map("balance_after")
+  type           String   @db.VarChar(30) // admin_grant, game_win, referral_bonus, ticket_purchase, etc.
+  referenceId    String?  @map("reference_id") @db.Uuid
+  note           String?  @db.Text
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([userId, createdAt])
+  @@map("coin_transactions")
+}
+
+model DepositAddress {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  method     String    @db.VarChar(20) // BTC, ETH, USDT_TRC20, BNB, amazon, google, apple, steam
+  address    String?   @db.Text
+  qrUrl      String?   @map("qr_url") @db.Text
+  isActive   Boolean   @default(true) @map("is_active")
+  sortOrder  Int       @default(0) @map("sort_order")
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("deposit_addresses")
+}
+
+// ============================================
+// CELEBRITIES & GAMES
+// ============================================
+
+model Celebrity {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(200)
+  slug            String    @unique @db.VarChar(100)
+  bio             String?   @db.Text
+  avatarUrl       String?   @map("avatar_url") @db.Text
+  bannerUrl       String?   @map("banner_url") @db.Text
+  isPublished     Boolean   @default(false) @map("is_published")
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  gameSessions    GameSession[]
+  triviaQuestions TriviaQuestion[]
+  ticketCache     TicketListingCache[]
+
+  @@map("celebrities")
+}
+
+model GameSession {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
+  celebrityId       String?   @map("celebrity_id") @db.Uuid
+  celebrity         Celebrity? @relation(fields: [celebrityId], references: [id])
+  gameType          String    @map("game_type") @db.VarChar(20) // trivia, memory, number_guess, word_scramble, hangman, spin
+  tierId            String    @map("tier_id") @db.Uuid
+  tier              Tier      @relation(fields: [tierId], references: [id])
+  winRateSnapshot   Int       @map("win_rate_snapshot")
+  status            String    @default("active") @db.VarChar(10) // active, won, lost, forfeit
+  score             Int       @default(0)
+  coinsEarned       Int       @default(0) @map("coins_earned")
+  prizeWon          String?   @map("prize_won") @db.VarChar(100)
+  prizeCode         String?   @map("prize_code") @db.VarChar(50)
+  gameData          Json?     @map("game_data")
+  startedAt         DateTime  @default(now()) @map("started_at") @db.Timestamptz
+  completedAt       DateTime? @map("completed_at") @db.Timestamptz
+
+  prizeRedemptions  PrizeRedemption[]
+
+  @@map("game_sessions")
+}
+
+model TriviaQuestion {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  celebrityId   String    @map("celebrity_id") @db.Uuid
+  celebrity     Celebrity @relation(fields: [celebrityId], references: [id])
+  question      String    @db.Text
+  options       Json      // array of 4 strings
+  correctIndex  Int       @map("correct_index")
+  difficulty    String    @default("medium") @db.VarChar(10)
+  isActive      Boolean   @default(true) @map("is_active")
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("trivia_questions")
+}
+
+model Prize {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  label        String    @db.VarChar(100)
+  type         String    @db.VarChar(20) // cash, merch, ticket, coupon, coins
+  coinValue    Int?      @map("coin_value")
+  tierSlug     String?   @map("tier_slug") @db.VarChar(20) // NULL = all tiers eligible
+  isActive     Boolean   @default(true) @map("is_active")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  redemptions         PrizeRedemption[]
+  ticketGameOffers    TicketGameOffer[]
+  ticketGameSessions  TicketGameSession[]
+
+  @@map("prizes")
+}
+
+model PrizeRedemption {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id])
+  prizeId      String    @map("prize_id") @db.Uuid
+  prize        Prize     @relation(fields: [prizeId], references: [id])
+  sessionId    String?   @map("session_id") @db.Uuid
+  session      GameSession? @relation(fields: [sessionId], references: [id])
+  code         String    @db.VarChar(50)
+  status       String    @default("pending") @db.VarChar(20) // pending, fulfilled, voided
+  fulfilledBy  String?   @map("fulfilled_by") @db.Uuid
+  fulfilledAt  DateTime? @map("fulfilled_at") @db.Timestamptz
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("prize_redemptions")
+}
+
+// ============================================
+// TICKET EXCHANGE & AUCTION
+// ============================================
+
+model TicketListingCache {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ticketmasterId  String    @unique @map("ticketmaster_id") @db.VarChar(100)
+  eventName       String    @map("event_name") @db.VarChar(500)
+  artistName      String?   @map("artist_name") @db.VarChar(200)
+  celebrityId     String?   @map("celebrity_id") @db.Uuid
+  celebrity       Celebrity? @relation(fields: [celebrityId], references: [id])
+  venue           String?   @db.VarChar(200)
+  city            String?   @db.VarChar(100)
+  country         String?   @db.VarChar(10)
+  eventDate       DateTime? @map("event_date") @db.Timestamptz
+  imageUrl        String?   @map("image_url") @db.Text
+  ticketUrl       String?   @map("ticket_url") @db.Text
+  priceMin        Decimal?  @map("price_min") @db.Decimal(10,2)
+  priceMax        Decimal?  @map("price_max") @db.Decimal(10,2)
+  currency        String    @default("USD") @db.VarChar(10)
+  fetchedAt       DateTime  @default(now()) @map("fetched_at") @db.Timestamptz
+
+  exchangeListings TicketExchange[]
+
+  @@index([eventDate, artistName])
+  @@map("ticket_listings_cache")
+}
+
+model TicketExchange {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sellerId          String    @map("seller_id") @db.Uuid
+  seller            User      @relation("TicketExchangeSeller", fields: [sellerId], references: [id])
+  ticketListingId   String?   @map("ticket_listing_id") @db.Uuid
+  ticketListing     TicketListingCache? @relation(fields: [ticketListingId], references: [id])
+  eventName         String?   @map("event_name") @db.VarChar(500)
+  eventDate         DateTime? @map("event_date") @db.Timestamptz
+  seatInfo          String?   @map("seat_info") @db.VarChar(200)
+  quantity          Int       @default(1)
+  listingType       String    @default("fixed") @map("listing_type") @db.VarChar(10) // fixed, auction
+  askingPriceCoins  Int?      @map("asking_price_coins")
+  ticketImageUrl    String?   @map("ticket_image_url") @db.Text
+  description       String?   @db.Text
+  status            String    @default("active") @db.VarChar(20) // active, sold, cancelled, expired
+  buyerId           String?   @map("buyer_id") @db.Uuid
+  buyer             User?     @relation("TicketExchangeBuyer", fields: [buyerId], references: [id])
+  soldAt            DateTime? @map("sold_at") @db.Timestamptz
+  expiresAt         DateTime  @map("expires_at") @db.Timestamptz
+  idempotencyKey    String?   @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  auctionBids       TicketAuctionBid[]
+
+  @@map("ticket_exchanges")
+}
+
+model TicketAuctionBid {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  exchangeId     String    @map("exchange_id") @db.Uuid
+  exchange       TicketExchange @relation(fields: [exchangeId], references: [id])
+  bidderId       String    @map("bidder_id") @db.Uuid
+  bidder         User      @relation(fields: [bidderId], references: [id])
+  bidCoins       Int       @map("bid_coins")
+  isWinning      Boolean   @default(false) @map("is_winning")
+  coinsReserved  Boolean   @default(false) @map("coins_reserved")
+  idempotencyKey String?   @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([exchangeId, bidCoins])
+  @@unique([exchangeId, bidderId])
+  @@map("ticket_auction_bids")
+}
+
+model CoinEscrow {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id])
+  amount       Int
+  reason       String    @db.VarChar(50) // auction_bid
+  referenceId  String?   @map("reference_id") @db.Uuid
+  released     Boolean   @default(false)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("coin_escrow")
+}
+
+// ============================================
+// PVP TICKET GAME
+// ============================================
+
+model TicketGameOffer {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id])
+  prizeId      String    @map("prize_id") @db.Uuid
+  prize        Prize     @relation(fields: [prizeId], references: [id])
+  wagerCoins   Int       @map("wager_coins")
+  status       String    @default("pending") @db.VarChar(20) // pending, accepted, expired, declined
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz
+  idempotencyKey String?  @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  sessions     TicketGameSession[]
+
+  @@map("ticket_game_offers")
+}
+
+model TicketGameSession {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  player1Id     String    @map("player1_id") @db.Uuid
+  player1       User      @relation("Player1", fields: [player1Id], references: [id])
+  player2Id     String    @map("player2_id") @db.Uuid
+  player2       User      @relation("Player2", fields: [player2Id], references: [id])
+  offerId       String    @map("offer_id") @db.Uuid
+  offer         TicketGameOffer @relation(fields: [offerId], references: [id])
+  prizeId       String    @map("prize_id") @db.Uuid
+  prize         Prize     @relation(fields: [prizeId], references: [id])
+  status        String    @default("waiting") @db.VarChar(20) // waiting, active, completed, forfeit
+  player1TapMs  Int?      @map("player1_tap_ms")
+  player2TapMs  Int?      @map("player2_tap_ms")
+  winnerId      String?   @map("winner_id") @db.Uuid
+  winner        User?     @relation("Winner", fields: [winnerId], references: [id])
+  startedAt     DateTime? @map("started_at") @db.Timestamptz
+  completedAt   DateTime? @map("completed_at") @db.Timestamptz
+  idempotencyKey String?   @unique @map("idempotency_key") @db.VarChar(36)
+  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("ticket_game_sessions")
+}
+
+// ============================================
+// REFERRALS
+// ============================================
+
+model ReferralEvent {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  referrerId   String    @map("referrer_id") @db.Uuid
+  referrer     User      @relation("Referrer", fields: [referrerId], references: [id])
+  referredId   String    @unique @map("referred_id") @db.Uuid
+  referred     User      @relation("Referred", fields: [referredId], references: [id])
+  activated    Boolean   @default(false)
+  activatedAt  DateTime? @map("activated_at") @db.Timestamptz
+  bonusCoins   Int?      @map("bonus_coins")
+  bonusIssued  Boolean   @default(false) @map("bonus_issued")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("referral_events")
+}
+
+// ============================================
+// NOTIFICATIONS & ANNOUNCEMENTS
+// ============================================
+
+model UserNotification {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  user         User      @relation(fields: [userId], references: [id])
+  type         String    @db.VarChar(50)
+  title        String    @db.VarChar(200)
+  body         String?   @db.Text
+  ctaLabel     String?   @map("cta_label") @db.VarChar(100)
+  ctaUrl       String?   @map("cta_url") @db.Text
+  tierTarget   String?   @map("tier_target") @db.VarChar(20)
+  accentColor  String?   @map("accent_color") @db.VarChar(7)
+  isRead       Boolean   @default(false) @map("is_read")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("user_notifications")
+}
+
+model Announcement {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title        String    @db.VarChar(200)
+  body         String    @db.Text
+  tierTarget   String?   @map("tier_target") @db.VarChar(20) // NULL = all tiers
+  scheduledAt  DateTime? @map("scheduled_at") @db.Timestamptz
+  publishedAt  DateTime? @map("published_at") @db.Timestamptz
+  createdBy    String?   @map("created_by") @db.Uuid
+  creator      AdminUser? @relation(fields: [createdBy], references: [id])
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("announcements")
+}
+
+// ============================================
+// AUDIT LOGS
+// ============================================
+
+model AuditLog {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  adminId      String    @map("admin_id") @db.Uuid
+  admin        AdminUser @relation(fields: [adminId], references: [id])
+  action       String    @db.VarChar(100)
+  targetUserId String?   @map("target_user_id") @db.Uuid
+  metadata     Json?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  @@map("audit_logs")
+}
