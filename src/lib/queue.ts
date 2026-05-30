@@ -1,24 +1,55 @@
-import { Queue } from 'bullmq';
-import { bullmqRedis } from './redis.js';
+// src/lib/queue.ts
+import { Queue, Worker } from 'bullmq';
+import { redisConnection } from './redis.js';
+import { syncTicketmasterEvents } from '../jobs/tickets.job.js';
+import { startStaggeredNewsRefresh } from '../jobs/news.job.js';
 
-export const QUEUES = {
-  AUCTION_RESOLVE: 'auction-resolve',
-  EMAIL: 'email',
-  NOTIFICATION: 'notification',
+const logger = {
+  info: (...args: any[]) => console.log('[Queue]', ...args),
+  warn: (...args: any[]) => console.warn('[Queue]', ...args),
+  error: (...args: any[]) => console.error('[Queue]', ...args),
 };
 
-// Use type assertion to satisfy TypeScript – at runtime it works.
-const connection = bullmqRedis as any;
+// Queues
+export const ticketsQueue = new Queue('tickets-sync', { connection: redisConnection });
+export const newsQueue = new Queue('news-refresh', { connection: redisConnection });
 
-export const auctionQueue = new Queue(QUEUES.AUCTION_RESOLVE, {
-  connection,
-  defaultJobOptions: {
-    attempts: 3,
-    backoff: { type: 'exponential', delay: 5000 },
-    removeOnComplete: true,
-    removeOnFail: false,
-  },
-});
+// Workers
+new Worker('tickets-sync', async (job) => {
+  logger.info(`Running Ticketmaster sync job`);
+  await syncTicketmasterEvents();
+}, { connection: redisConnection });
 
-export const emailQueue = new Queue(QUEUES.EMAIL, { connection });
-export const notificationQueue = new Queue(QUEUES.NOTIFICATION, { connection });
+new Worker('news-refresh', async (job) => {
+  logger.info(`Running staggered news refresh`);
+  await startStaggeredNewsRefresh();
+}, { connection: redisConnection });
+
+// Schedule jobs
+export async function scheduleJobs() {
+  try {
+    if (process.env.TICKETMASTER_API_KEY) {
+      await ticketsQueue.add('sync-tickets', {}, {
+        repeat: { pattern: '0 */2 * * *' },
+        removeOnComplete: true,
+        removeOnFail: false
+      });
+      logger.info('✅ Scheduled Ticketmaster sync job (every 2 hours)');
+    } else {
+      logger.warn('⚠️ TICKETMASTER_API_KEY not set, skipping sync');
+    }
+    
+    if (process.env.NEWSAPI_KEY) {
+      await newsQueue.add('refresh-news', {}, {
+        delay: 5000,
+        removeOnComplete: true
+      });
+      logger.info('✅ Scheduled news refresh job (staggered)');
+    } else {
+      logger.warn('⚠️ NEWSAPI_KEY not set, skipping news refresh');
+    }
+    
+  } catch (error) {
+    logger.error('Failed to schedule jobs:', error);
+  }
+}
