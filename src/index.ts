@@ -8,6 +8,8 @@ import { Server } from 'socket.io';
 import { createServer } from 'http';
 import { setupUserNamespace } from './socket/user.namespace.js';
 import { setupAdminNamespace } from './socket/admin.namespace.js';
+import { scheduleJobs } from './jobs/queue.js';
+import { syncTicketmasterEvents } from './jobs/tickets.job.js';
 
 const prisma = new PrismaClient();
 const idempotencyService = new IdempotencyService();
@@ -22,13 +24,10 @@ const io = new Server(httpServer, {
   },
 });
 
-// Make io globally accessible for emitting events from services
 (global as any).io = io;
 
-// Attach namespaces
 const userNamespace = setupUserNamespace(io);
 const adminNamespace = setupAdminNamespace(io);
-
 app.set('io', io);
 
 const PORT = process.env.PORT || 3001;
@@ -44,6 +43,15 @@ httpServer.listen(PORT, () => {
   console.log(`✅ Redis: Connected (Upstash)`);
   console.log(`✅ Database: Connected (Neon)`);
   console.log(`✅ Socket.IO: /user and /admin namespaces ready\n`);
+  
+  // Start scheduled jobs (BullMQ)
+  scheduleJobs().catch(console.error);
+  
+  // Optional: Run one manual sync after 10 seconds for immediate testing
+  setTimeout(async () => {
+    console.log('🔁 Running manual Ticketmaster sync for initial data...');
+    await syncTicketmasterEvents();
+  }, 10000);
 });
 
 // Auction resolver (runs every 30 seconds)
@@ -94,12 +102,17 @@ process.on('SIGINT', async () => {
     process.exit(0);
   });
 });
-app.get('/health/db', async (req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ status: 'ok', database: 'connected' });
-  } catch (error) {
-    console.error('Database health check failed:', error);
-    res.status(500).json({ status: 'error', database: 'disconnected' });
-  }
-});
+
+// Health/db endpoint (must be after app creation, but kept as is)
+// It's already defined in app.ts, but this won't conflict because it's after the server starts? 
+// Actually app.get('/health/db') was defined in app.ts already. Remove this duplicate.
+// I'll comment it out to avoid conflict.
+// app.get('/health/db', async (req, res) => {
+//   try {
+//     await prisma.$queryRaw`SELECT 1`;
+//     res.json({ status: 'ok', database: 'connected' });
+//   } catch (error) {
+//     console.error('Database health check failed:', error);
+//     res.status(500).json({ status: 'error', database: 'disconnected' });
+//   }
+// });

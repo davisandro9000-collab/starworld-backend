@@ -1,3 +1,4 @@
+// src/controllers/adminDeposit.controller.ts
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { ApiError } from '../lib/apiError.js';
@@ -7,6 +8,7 @@ import { TierService } from '../services/tier.service.js';
 import { ReferralService } from '../services/referral.service.js';
 import { NotificationService } from '../services/notification.service.js';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';   // used for referral idempotency key
 
 const idempotencyService = new IdempotencyService();
 const coinService = new CoinService(prisma, idempotencyService);
@@ -19,98 +21,146 @@ const creditDepositSchema = z.object({
   coinsToAward: z.number().min(1)
 });
 
+function getParamId(param: string | string[] | undefined): string {
+  if (!param) throw new Error('Missing parameter');
+  return Array.isArray(param) ? param[0] : param;
+}
+
+async function runTransactionWithRetry<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  delayMs = 500
+): Promise<T> {
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      if (error?.message?.includes('Unable to start a transaction') && i < maxRetries - 1) {
+        console.log(`Transaction retry ${i + 1}/${maxRetries} after ${delayMs}ms`);
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Transaction failed after retries');
+}
+
 export const getPendingDeposits = async (req: Request, res: Response) => {
   const deposits = await prisma.deposit.findMany({
     where: { status: 'pending' },
-    include: {
-      user: {
-        select: {
-          id: true,
-          username: true,
-          email: true,
-          tier: true
-        }
-      }
-    },
+    include: { user: { select: { id: true, username: true, email: true, tier: true } } },
     orderBy: { createdAt: 'asc' }
   });
   res.json({ success: true, deposits });
 };
 
 export const getPendingCount = async (req: Request, res: Response) => {
-  const count = await prisma.deposit.count({
-    where: { status: 'pending' }
-  });
+  const count = await prisma.deposit.count({ where: { status: 'pending' } });
   res.json({ success: true, count });
 };
 
 export const creditDeposit = async (req: Request, res: Response) => {
-  const depositId = Array.isArray(req.params.depositId) ? req.params.depositId[0] : req.params.depositId;
+  const depositId = getParamId(req.params.depositId);
   const adminId = req.admin!.id;
   const idempotencyKey = req.idempotencyKey;
   const { usdValue, coinsToAward } = creditDepositSchema.parse(req.body);
 
-  const existing = await prisma.deposit.findFirst({
-    where: { id: depositId, status: 'credited' }
-  });
-  if (existing) {
-    return res.json({ success: true, deposit: existing, idempotent: true, message: 'Deposit already credited' });
+  const { executed, result } = await idempotencyService.process(
+    idempotencyKey,
+    86400,
+    async () => {
+      return await runTransactionWithRetry(async () => {
+        return await prisma.$transaction(async (tx) => {
+          const deposit = await tx.deposit.findUnique({
+            where: { id: depositId },
+            select: { status: true, userId: true }
+          });
+          if (!deposit) throw ApiError.notFound('Deposit not found');
+          if (deposit.status !== 'pending') {
+            throw ApiError.badRequest(`Deposit already ${deposit.status}`);
+          }
+
+          const updatedDeposit = await tx.deposit.update({
+            where: { id: depositId },
+            data: {
+              usdValue,
+              coinsToAward,
+              status: 'credited',
+              verifiedById: adminId,
+              verifiedAt: new Date(),
+              idempotencyKey
+            }
+          });
+
+          const users = await tx.$queryRaw<{ coin_balance: number }[]>`
+            SELECT coin_balance FROM users WHERE id = ${updatedDeposit.userId}::uuid FOR UPDATE
+          `;
+          const currentBalance = users[0]?.coin_balance ?? 0;
+          const newBalance = currentBalance + coinsToAward;
+
+          await tx.user.update({
+            where: { id: updatedDeposit.userId },
+            data: { coinBalance: newBalance }
+          });
+
+          await tx.coinTransaction.create({
+            data: {
+              userId: updatedDeposit.userId,
+              amount: coinsToAward,
+              balanceAfter: newBalance,
+              type: 'admin_grant',
+              referenceId: updatedDeposit.id,
+              note: `Deposit credit: $${usdValue} = ${coinsToAward} coins`,
+              idempotencyKey: idempotencyKey || undefined
+            }
+          });
+
+          return updatedDeposit;
+        });
+      });
+    }
+  );
+
+  if (!executed) {
+    return res.json({
+      success: true,
+      deposit: result,
+      idempotent: true,
+      message: 'Deposit already credited'
+    });
   }
 
-  const result = await prisma.$transaction(async (tx) => {
-    const deposit = await tx.deposit.update({
-      where: { id: depositId, status: 'pending' },
-      data: {
-        usdValue,
-        coinsToAward,
-        status: 'credited',
-        verifiedById: adminId,
-        verifiedAt: new Date(),
-        idempotencyKey
-      }
-    });
-    if (!deposit) throw ApiError.notFound('Deposit not found or already processed');
+  const deposit = result;
 
-    const user = await tx.user.findUnique({
-      where: { id: deposit.userId },
-      select: { coinBalance: true }
-    });
-    if (!user) throw ApiError.notFound('User not found');
-
-    const newBalance = user.coinBalance + coinsToAward;
-    await tx.user.update({
-      where: { id: deposit.userId },
-      data: { coinBalance: newBalance }
-    });
-    await tx.coinTransaction.create({
-      data: {
-        userId: deposit.userId,
-        amount: coinsToAward,
-        balanceAfter: newBalance,
-        type: 'admin_grant',
-        referenceId: deposit.id,
-        note: `Deposit credit: $${usdValue} = ${coinsToAward} coins`,
-        idempotencyKey: idempotencyKey || undefined
-      }
-    });
-    return deposit;
-  });
-
-  // Activate referral if applicable
-  await referralService.activateReferral(result.userId, `${idempotencyKey}_referral`);
-  // Check tier upgrade
-  await tierService.checkAndUpgradeTier(result.userId);
-  // Send notification and email
-  const user = await prisma.user.findUnique({ where: { id: result.userId } });
-  if (user) {
-    await notificationService.notifyDepositCredited(user.id, user.username, user.email, usdValue, coinsToAward);
+  // Side effects (non‑blocking)
+  try {
+    // Use a fresh UUID for referral activation to avoid length issues
+    await referralService.activateReferral(deposit.userId, uuidv4());
+    await tierService.checkAndUpgradeTier(deposit.userId);
+    const user = await prisma.user.findUnique({ where: { id: deposit.userId } });
+    if (user) {
+      await notificationService.notifyDepositCredited(
+        user.id, user.username, user.email, usdValue, coinsToAward
+      );
+    }
+    if ((global as any).io) {
+      (global as any).io.of('/user').to(`user:${deposit.userId}`).emit('notification', {
+        type: 'deposit_credited',
+        title: 'Deposit Verified!',
+        body: `$${usdValue} added → ${coinsToAward} coins credited`
+      });
+      (global as any).io.of('/user').to(`user:${deposit.userId}`).emit('coin_update', { newBalance: user?.coinBalance });
+    }
+  } catch (sideError) {
+    console.error('Side effects failed:', sideError);
   }
 
-  res.json({ success: true, deposit: result, idempotent: false });
+  res.json({ success: true, deposit, idempotent: false });
 };
 
 export const rejectDeposit = async (req: Request, res: Response) => {
-  const depositId = Array.isArray(req.params.depositId) ? req.params.depositId[0] : req.params.depositId;
+  const depositId = getParamId(req.params.depositId);
   const adminId = req.admin!.id;
   const { reason } = req.body;
   if (!reason) throw ApiError.badRequest('Rejection reason required');

@@ -1,9 +1,8 @@
 import { PrismaClient } from '@prisma/client';
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
-
-export const prisma = globalForPrisma.prisma ?? new PrismaClient();
-
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma;
+export const prisma = new PrismaClient({
+  transactionOptions: {
+    maxWait: 10000,  // wait up to 10 seconds for a transaction
+    timeout: 15000,  // transaction timeout 15 seconds
+  },
+});

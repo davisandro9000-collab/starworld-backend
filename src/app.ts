@@ -1,13 +1,16 @@
+// src/app.ts
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
+import { prisma } from './lib/prisma.js';
 import authRoutes from './routes/auth.routes.js';
 import adminAuthRoutes from './routes/adminAuth.routes.js';
 import depositRoutes from './routes/deposit.routes.js';
 import adminDepositRoutes from './routes/adminDeposit.routes.js';
 import userRoutes from './routes/user.routes.js';
+import adminUserRoutes from './routes/adminUser.routes.js';
 import gameRoutes from './routes/game.routes.js';
 import ticketRoutes from './routes/ticket.routes.js';
 import adminTicketRoutes from './routes/adminTicket.routes.js';
@@ -16,8 +19,9 @@ import ticketGameRoutes from './routes/ticketGame.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import debugRoutes from './routes/debug.routes.js';
 import celebrityRoutes from './routes/celebrity.routes.js';
+import adminAnalyticsRoutes from './routes/adminAnalytics.routes.js';   // <-- ADDED
 
-export const createApp = () => {
+const createApp = () => {
   const app = express();
 
   app.use(helmet());
@@ -29,15 +33,28 @@ export const createApp = () => {
   app.use(cookieParser());
   app.use(morgan('dev'));
 
+  // Health checks
   app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
   });
 
+  app.get('/health/db', async (req, res) => {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      res.json({ status: 'ok', database: 'connected' });
+    } catch (error) {
+      console.error('Database health check failed:', error);
+      res.status(500).json({ status: 'error', database: 'disconnected' });
+    }
+  });
+
+  // API routes
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/admin/v1/auth', adminAuthRoutes);
   app.use('/api/v1/deposits', depositRoutes);
   app.use('/api/v1/admin/deposits', adminDepositRoutes);
   app.use('/api/v1/users', userRoutes);
+  app.use('/api/admin/v1/users', adminUserRoutes);
   app.use('/api/v1/games', gameRoutes);
   app.use('/api/v1/tickets', ticketRoutes);
   app.use('/api/v1/admin/tickets', adminTicketRoutes);
@@ -46,15 +63,19 @@ export const createApp = () => {
   app.use('/api/v1/notifications', notificationRoutes);
   app.use('/debug', debugRoutes);
   app.use('/api/v1/celebrities', celebrityRoutes);
+  app.use('/api/admin/v1/analytics', adminAnalyticsRoutes);   // <-- ADDED
 
+  // Test endpoint
   app.get('/api/v1/test', (req, res) => {
     res.json({ message: 'StarWorld API is running!' });
   });
 
+  // 404 handler – must be last
   app.use((req, res) => {
     res.status(404).json({ error: 'Endpoint not found' });
   });
 
+  // Global error handler
   app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
     console.error('Error:', err);
     res.status(err.statusCode || 500).json({
@@ -66,3 +87,5 @@ export const createApp = () => {
 
   return app;
 };
+
+export { createApp };

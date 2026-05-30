@@ -1,3 +1,4 @@
+// src/services/tier.service.ts
 import { PrismaClient } from '@prisma/client';
 import { ApiError } from '../lib/apiError.js';
 import { NotificationService } from './notification.service.js';
@@ -10,14 +11,19 @@ export class TierService {
       where: { id: userId },
       include: {
         tier: true,
-        deposits: { where: { status: 'credited' } },
-        referralEventsAsReferrer: { where: { activated: true } }
+        deposits: { where: { status: 'credited' } }
       }
     });
     if (!user) throw ApiError.notFound('User not found');
 
-    const totalDeposits = user.deposits.reduce((sum, d) => sum + (d.usdValue ? Number(d.usdValue) : 0), 0);
-    const activatedReferrals = user.referralEventsAsReferrer.length;
+    const totalDeposits = user.deposits.reduce(
+      (sum, d) => sum + (d.usdValue ? Number(d.usdValue) : 0),
+      0
+    );
+
+    const activatedReferrals = await this.prisma.referralEvent.count({
+      where: { referrerId: userId, activated: true }
+    });
 
     const platinumTier = await this.prisma.tier.findUnique({ where: { slug: 'platinum' } });
     if (platinumTier && totalDeposits >= Number(platinumTier.minDepositUsd)) {
@@ -28,7 +34,11 @@ export class TierService {
     }
 
     const silverTier = await this.prisma.tier.findUnique({ where: { slug: 'silver' } });
-    if (silverTier && totalDeposits >= Number(silverTier.minDepositUsd) && activatedReferrals >= silverTier.requiredReferrals) {
+    if (
+      silverTier &&
+      totalDeposits >= Number(silverTier.minDepositUsd) &&
+      activatedReferrals >= silverTier.requiredReferrals
+    ) {
       if (user.tier.slug !== 'silver') {
         await this.upgradeUser(user.id, silverTier.id, 'silver');
       }
@@ -36,23 +46,34 @@ export class TierService {
     }
 
     if (user.tier.slug === 'bronze' && !user.payoutUnlocked && activatedReferrals >= 7) {
-      await this.prisma.user.update({ where: { id: user.id }, data: { payoutUnlocked: true } });
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { payoutUnlocked: true }
+      });
       console.log(`✅ Bronze payout unlocked for user ${user.id}`);
     }
   }
 
-  private async upgradeUser(userId: string, newTierId: string, tierSlug: string): Promise<void> {
+  private async upgradeUser(
+    userId: string,
+    newTierId: string,
+    tierSlug: string
+  ): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
       data: { tierId: newTierId, payoutUnlocked: true }
     });
     console.log(`✅ User ${userId} upgraded to ${tierSlug} tier`);
 
-    // Send notification and email about tier upgrade
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (user) {
       const notificationService = new NotificationService(this.prisma);
-      await notificationService.notifyTierUpgrade(userId, user.username, user.email, tierSlug.charAt(0).toUpperCase() + tierSlug.slice(1));
+      await notificationService.notifyTierUpgrade(
+        userId,
+        user.username,
+        user.email,
+        tierSlug.charAt(0).toUpperCase() + tierSlug.slice(1)
+      );
     }
   }
 
@@ -66,7 +87,10 @@ export class TierService {
     });
     if (!user) throw ApiError.notFound('User not found');
 
-    const totalDeposited = user.deposits.reduce((sum, d) => sum + (d.usdValue ? Number(d.usdValue) : 0), 0);
+    const totalDeposited = user.deposits.reduce(
+      (sum, d) => sum + (d.usdValue ? Number(d.usdValue) : 0),
+      0
+    );
     const activatedReferrals = await this.prisma.referralEvent.count({
       where: { referrerId: userId, activated: true }
     });
@@ -77,15 +101,18 @@ export class TierService {
       currentTier: user.tier,
       totalDepositedUsd: totalDeposited,
       activatedReferrals,
-      nextTier: totalDeposited >= 10 ? null : {
-        tier: 'silver',
-        requiredDeposit: 5,
-        requiredReferrals: 3,
-        progress: {
-          deposit: Math.min(100, (totalDeposited / 5) * 100),
-          referrals: Math.min(100, (activatedReferrals / 3) * 100)
-        }
-      },
+      nextTier:
+        totalDeposited >= 10
+          ? null
+          : {
+              tier: 'silver',
+              requiredDeposit: 5,
+              requiredReferrals: 3,
+              progress: {
+                deposit: Math.min(100, (totalDeposited / 5) * 100),
+                referrals: Math.min(100, (activatedReferrals / 3) * 100)
+              }
+            },
       payoutUnlocked: user.payoutUnlocked
     };
   }

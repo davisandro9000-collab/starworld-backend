@@ -3,27 +3,33 @@ import crypto from 'crypto';
 import { ApiError } from '../lib/apiError.js';
 import { CoinService } from './coin.service.js';
 import { IdempotencyService } from './idempotency.service.js';
+import { NotificationService } from './notification.service.js';
 
 const MIN_GAME_SECONDS = 2;
 const CONSOLATION_COINS = 5;
 
 export class GameEngineService {
   private coinService: CoinService;
+  private idempotencyService: IdempotencyService;
+  private notificationService: NotificationService;
 
   constructor(
     private prisma: PrismaClient,
     idempotencyService: IdempotencyService
   ) {
+    this.idempotencyService = idempotencyService;
     this.coinService = new CoinService(prisma, idempotencyService);
+    this.notificationService = new NotificationService(prisma);
   }
 
-  async startSession(userId: string, gameType: string, celebrityId?: string, idempotencyKey?: string) {
+  async startSession(userId: string, gameType: string, celebrityId?: string) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
       include: { tier: true }
     });
     if (!user) throw ApiError.notFound('User not found');
     if (user.isBanned) throw ApiError.forbidden('Account is banned');
+
     const winRate = gameType === 'spin' ? user.tier.spinWinRate : user.tier.gameWinRate;
     const session = await this.prisma.gameSession.create({
       data: {
@@ -33,50 +39,88 @@ export class GameEngineService {
         tierId: user.tierId!,
         winRateSnapshot: winRate,
         status: 'active',
-        gameData: { startedAt: new Date().toISOString() }
       }
     });
     return session;
   }
 
-  async completeGame(sessionId: string, userId: string, score: number, gameData: any, idempotencyKey: string) {
-    const session = await this.prisma.gameSession.findUnique({
-      where: { id: sessionId, userId },
-      include: { tier: true }
+  async completeGame(
+    sessionId: string,
+    userId: string,
+    score: number,
+    gameData: any,
+    idempotencyKey: string
+  ) {
+    return this.idempotencyService.process(idempotencyKey, 86400, async () => {
+      const session = await this.prisma.gameSession.findUnique({
+        where: { id: sessionId, userId },
+        include: { tier: true, user: true }
+      });
+      if (!session) throw ApiError.notFound('Game session not found');
+      if (session.status !== 'active') throw ApiError.badRequest('Game already completed');
+
+      const elapsed = Date.now() - session.startedAt.getTime();
+      if (elapsed < MIN_GAME_SECONDS * 1000) {
+        await this.flagFraud(userId, sessionId, 'too_fast', elapsed);
+        throw ApiError.badRequest(`Game completed too quickly. Minimum ${MIN_GAME_SECONDS} seconds required.`);
+      }
+
+      const random = Math.random() * 100;
+      const won = random < session.winRateSnapshot;
+      const multiplier = Number(session.tier.coinMultiplier);
+
+      let result;
+      if (won) {
+        result = await this.handleWin(session, score, gameData, multiplier, idempotencyKey);
+      } else {
+        result = await this.handleLoss(session, multiplier, idempotencyKey);
+      }
+
+      this.emitLiveFeed(session.userId, session.user.username, result.prize?.label || `${result.coinsEarned} coins`, session.celebrityId);
+      this.updateLeaderboard();
+
+      return result;
     });
-    if (!session) throw ApiError.notFound('Game session not found');
-    if (session.status !== 'active') throw ApiError.badRequest('Game already completed');
-    const elapsed = Date.now() - new Date(session.startedAt).getTime();
-    if (elapsed < MIN_GAME_SECONDS * 1000) {
-      await this.flagFraud(userId, sessionId, 'too_fast', elapsed);
-      throw ApiError.badRequest(`Game completed too quickly. Minimum ${MIN_GAME_SECONDS} seconds required.`);
-    }
-    const random = Math.random() * 100;
-    const won = random < session.winRateSnapshot;
-    const tier = await this.prisma.tier.findUnique({ where: { id: session.tierId } });
-    if (!tier) throw ApiError.internal('Tier configuration missing');
-    const multiplier = Number(tier.coinMultiplier);
-    if (won) {
-      return await this.handleWin(session, userId, score, gameData, multiplier, idempotencyKey);
-    } else {
-      return await this.handleLoss(session, userId, multiplier, idempotencyKey);
-    }
   }
 
-  private async handleWin(session: any, userId: string, score: number, gameData: any, multiplier: number, idempotencyKey: string) {
+  private async handleWin(session: any, score: number, gameData: any, multiplier: number, idempotencyKey: string) {
     const baseCoins = this.getBaseCoinsForGame(session.gameType, score);
     const coinsEarned = Math.round(baseCoins * multiplier);
+
     let prize = null;
     let prizeCode = null;
     const prizeRoll = Math.random() * 100;
     if (prizeRoll < 20) {
-      const prizeResult = await this.awardPrize(userId, session.tierId, session.gameType);
+      const prizeResult = await this.awardPrize(session.userId, session.tierId, session.gameType);
       prize = prizeResult.prize;
       prizeCode = prizeResult.code;
     }
 
-    const result = await this.prisma.$transaction(async (tx) => {
-      const updatedSession = await tx.gameSession.update({
+    const updatedSession = await this.prisma.$transaction(async (tx) => {
+      const users = await tx.$queryRaw<{ coin_balance: number }[]>`
+        SELECT coin_balance FROM users WHERE id = ${session.userId}::uuid FOR UPDATE
+      `;
+      const currentBalance = users[0]?.coin_balance ?? 0;
+      const newBalance = currentBalance + coinsEarned;
+
+      await tx.user.update({
+        where: { id: session.userId },
+        data: { coinBalance: newBalance }
+      });
+
+      await tx.coinTransaction.create({
+        data: {
+          userId: session.userId,
+          amount: coinsEarned,
+          balanceAfter: newBalance,
+          type: 'game_win',
+          referenceId: session.id,
+          note: `Won ${coinsEarned} coins from ${session.gameType}`,
+          idempotencyKey
+        }
+      });
+
+      const updated = await tx.gameSession.update({
         where: { id: session.id },
         data: {
           status: 'won',
@@ -88,70 +132,47 @@ export class GameEngineService {
           completedAt: new Date()
         }
       });
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { coinBalance: true } });
-      const newBalance = user!.coinBalance + coinsEarned;
-      await tx.user.update({ where: { id: userId }, data: { coinBalance: newBalance } });
-      await tx.coinTransaction.create({
-        data: {
-          userId,
-          amount: coinsEarned,
-          balanceAfter: newBalance,
-          type: 'game_win',
-          referenceId: session.id,
-          note: `Won ${coinsEarned} coins from ${session.gameType}`,
-          idempotencyKey
-        }
-      });
-      return updatedSession;
+      return updated;
     });
 
-    // Socket.IO emissions: live feed and leaderboard
-    const io = (global as any).io;
-    if (io) {
-      const user = await this.prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
-      io.of('/user').emit('live_feed', {
-        winnerName: user?.username || 'Someone',
-        prizeName: prize?.label || `${coinsEarned} coins`,
-        starName: session.celebrityId ? 'a celebrity' : 'StarWorld',
-      });
-      // Emit updated leaderboard
-      const topWinners = await this.prisma.gameSession.groupBy({
-        by: ['userId'],
-        where: { status: 'won' },
-        _sum: { coinsEarned: true },
-        orderBy: { _sum: { coinsEarned: 'desc' } },
-        take: 5,
-      });
-      const leaderboard = await Promise.all(topWinners.map(async (w) => {
-        const u = await this.prisma.user.findUnique({ where: { id: w.userId }, select: { username: true } });
-        return { username: u?.username, totalCoins: w._sum.coinsEarned };
-      }));
-      io.of('/user').emit('leaderboard_update', leaderboard);
-    }
+    // ✅ Fixed: createNotification expects (userId, data)
+    await this.notificationService.createNotification(session.userId, {
+      type: 'game_win',
+      title: prize ? `You won a ${prize.label}!` : 'You won!',
+      body: prize ? `You earned ${coinsEarned} coins and a ${prize.label}.` : `You earned ${coinsEarned} coins.`,
+      accentColor: '#FFD700',
+      ctaLabel: 'Claim Prize',
+      ctaUrl: '/dashboard/prizes'
+    });
 
     return {
       won: true,
       coinsEarned,
       prize,
       prizeCode,
-      session: result,
+      session: updatedSession,
       message: `🎉 You won ${coinsEarned} coins!`
     };
   }
 
-  private async handleLoss(session: any, userId: string, multiplier: number, idempotencyKey: string) {
+  private async handleLoss(session: any, multiplier: number, idempotencyKey: string) {
     const consolationCoins = Math.round(CONSOLATION_COINS * multiplier);
-    const result = await this.prisma.$transaction(async (tx) => {
-      const updatedSession = await tx.gameSession.update({
-        where: { id: session.id },
-        data: { status: 'lost', completedAt: new Date() }
+
+    const updatedSession = await this.prisma.$transaction(async (tx) => {
+      const users = await tx.$queryRaw<{ coin_balance: number }[]>`
+        SELECT coin_balance FROM users WHERE id = ${session.userId}::uuid FOR UPDATE
+      `;
+      const currentBalance = users[0]?.coin_balance ?? 0;
+      const newBalance = currentBalance + consolationCoins;
+
+      await tx.user.update({
+        where: { id: session.userId },
+        data: { coinBalance: newBalance }
       });
-      const user = await tx.user.findUnique({ where: { id: userId }, select: { coinBalance: true } });
-      const newBalance = user!.coinBalance + consolationCoins;
-      await tx.user.update({ where: { id: userId }, data: { coinBalance: newBalance } });
+
       await tx.coinTransaction.create({
         data: {
-          userId,
+          userId: session.userId,
           amount: consolationCoins,
           balanceAfter: newBalance,
           type: 'game_win',
@@ -160,12 +181,26 @@ export class GameEngineService {
           idempotencyKey
         }
       });
-      return updatedSession;
+
+      const updated = await tx.gameSession.update({
+        where: { id: session.id },
+        data: { status: 'lost', completedAt: new Date() }
+      });
+      return updated;
     });
+
+    // ✅ Fixed: createNotification expects (userId, data)
+    await this.notificationService.createNotification(session.userId, {
+      type: 'game_loss',
+      title: 'Better luck next time!',
+      body: `You earned ${consolationCoins} consolation coins. Keep playing!`,
+      accentColor: '#CD7F32'
+    });
+
     return {
       won: false,
       consolationCoins,
-      session: result,
+      session: updatedSession,
       message: `😢 Better luck next time! You got ${consolationCoins} consolation coins.`
     };
   }
@@ -205,6 +240,40 @@ export class GameEngineService {
 
   private async flagFraud(userId: string, sessionId: string, reason: string, details: any) {
     console.log(`🚨 FRAUD ALERT: User ${userId} on session ${sessionId} - ${reason}`, details);
+  }
+
+  private async emitLiveFeed(userId: string, username: string, prizeName: string, celebrityId: string | null) {
+    const io = (global as any).io;
+    if (io) {
+      let starName = 'StarWorld';
+      if (celebrityId) {
+        const celeb = await this.prisma.celebrity.findUnique({ where: { id: celebrityId } });
+        starName = celeb?.name || 'a celebrity';
+      }
+      io.of('/user').emit('live_feed', {
+        winnerName: username,
+        prizeName,
+        starName
+      });
+    }
+  }
+
+  private async updateLeaderboard() {
+    const io = (global as any).io;
+    if (io) {
+      const topWinners = await this.prisma.gameSession.groupBy({
+        by: ['userId'],
+        where: { status: 'won' },
+        _sum: { coinsEarned: true },
+        orderBy: { _sum: { coinsEarned: 'desc' } },
+        take: 5,
+      });
+      const leaderboard = await Promise.all(topWinners.map(async (w) => {
+        const u = await this.prisma.user.findUnique({ where: { id: w.userId }, select: { username: true } });
+        return { username: u?.username, totalCoins: w._sum.coinsEarned };
+      }));
+      io.of('/user').emit('leaderboard_update', leaderboard);
+    }
   }
 
   async getLeaderboard(limit: number = 20) {

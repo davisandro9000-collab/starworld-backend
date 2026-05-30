@@ -7,6 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx src/index.ts",
+    "dev:admin": "nodemon src/admin.index.ts",
     "build": "tsc",
     "start": "node dist/index.js"
   },
@@ -24,7 +25,6 @@
     "@types/morgan": "^1.9.10",
     "@types/node": "^25.9.1",
     "@types/node-cron": "^3.0.11",
-    "@types/uuid": "^10.0.0",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
     "bcrypt": "^6.0.0",
@@ -51,9 +51,11 @@
     "winston": "^3.19.0",
     "zod": "^4.4.3"
   },
-  "devDependencies": {},
   "engines": {
     "node": "20.x",
     "npm": "10.x"
+  },
+  "devDependencies": {
+    "@types/uuid": "^10.0.0"
   }
 }
