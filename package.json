@@ -7,7 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "tsx src/index.ts",
-    "build": "tsc",
+    "build": "npx tsc",
     "start": "node dist/index.js"
   },
   "keywords": [],
@@ -52,5 +52,9 @@
     "tsx": "^4.22.3",
     "typescript": "^6.0.3",
     "zod": "^4.4.3"
-  }
+  },
+  "engines": {
+    "node": "20.x",
+    "npm": "10.x"
+}
 }
