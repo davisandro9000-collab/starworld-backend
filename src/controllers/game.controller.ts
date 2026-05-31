@@ -9,12 +9,13 @@ const gameService = new GameService(prisma, idempotencyService);
 
 const startGameSchema = z.object({
   gameType: z.enum(['trivia', 'memory', 'number_guess', 'word_scramble', 'hangman', 'spin']),
-  celebrityId: z.string().uuid().optional()
+  celebrityId: z.string().uuid().optional(),
 });
 
+// Make score optional – some games (e.g., spin) don't send a score
 const completeGameSchema = z.object({
-  score: z.number().min(0),
-  gameData: z.any().optional()
+  score: z.number().min(0).optional(),
+  gameData: z.any().optional(),
 });
 
 export const startGame = async (req: Request, res: Response) => {
@@ -29,20 +30,20 @@ export const startGame = async (req: Request, res: Response) => {
       id: session.id,
       gameType: session.gameType,
       winRateSnapshot: session.winRateSnapshot,
-      startedAt: session.startedAt
-    }
+      startedAt: session.startedAt,
+    },
   });
 };
 
 export const completeGame = async (req: Request, res: Response) => {
   // Ensure sessionId is a string, not string[]
-  const sessionId = Array.isArray(req.params.sessionId) 
-    ? req.params.sessionId[0] 
+  const sessionId = Array.isArray(req.params.sessionId)
+    ? req.params.sessionId[0]
     : req.params.sessionId;
-  
+
   const userId = req.user!.id;
   const idempotencyKey = req.idempotencyKey;
-  const { score, gameData } = completeGameSchema.parse(req.body);
+  const { score = 0, gameData } = completeGameSchema.parse(req.body); // default score to 0
 
   if (!idempotencyKey) {
     return res.status(400).json({ error: 'Idempotency-Key header required' });
@@ -58,7 +59,7 @@ export const completeGame = async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    ...result
+    ...result,
   });
 };
 
@@ -71,7 +72,7 @@ export const getGameHistory = async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    ...result
+    ...result,
   });
 };
 
@@ -82,6 +83,6 @@ export const getLeaderboard = async (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    leaderboard
+    leaderboard,
   });
 };

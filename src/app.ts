@@ -19,7 +19,10 @@ import ticketGameRoutes from './routes/ticketGame.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import debugRoutes from './routes/debug.routes.js';
 import celebrityRoutes from './routes/celebrity.routes.js';
-import adminAnalyticsRoutes from './routes/adminAnalytics.routes.js';   // <-- ADDED
+import adminAnalyticsRoutes from './routes/adminAnalytics.routes.js';
+import adminCelebrityRoutes from './routes/adminCelebrity.routes.js';
+import adminPrizeRoutes from './routes/adminPrize.routes.js';
+import adminAuditRoutes from './routes/adminAudit.routes.js';
 
 const createApp = () => {
   const app = express();
@@ -63,7 +66,10 @@ const createApp = () => {
   app.use('/api/v1/notifications', notificationRoutes);
   app.use('/debug', debugRoutes);
   app.use('/api/v1/celebrities', celebrityRoutes);
-  app.use('/api/admin/v1/analytics', adminAnalyticsRoutes);   // <-- ADDED
+  app.use('/api/admin/v1/analytics', adminAnalyticsRoutes);
+  app.use('/api/admin/v1/celebrities', adminCelebrityRoutes);
+  app.use('/api/admin/v1/prizes', adminPrizeRoutes);
+  app.use('/api/admin/v1/audit', adminAuditRoutes);
 
   // Test endpoint
   app.get('/api/v1/test', (req, res) => {

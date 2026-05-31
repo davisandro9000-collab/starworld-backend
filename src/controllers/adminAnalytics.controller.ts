@@ -1,4 +1,3 @@
-// src/controllers/adminAnalytics.controller.ts
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 
@@ -8,14 +7,14 @@ export const getDailyActiveUsers = async (req: Request, res: Response) => {
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - limit);
 
+  // Use started_at instead of created_at
   const result = await prisma.$queryRaw<{ date: Date; count: bigint }[]>`
-    SELECT DATE(created_at) as date, COUNT(DISTINCT user_id) as count
+    SELECT DATE(started_at) as date, COUNT(DISTINCT user_id) as count
     FROM game_sessions
-    WHERE created_at >= ${startDate}
-    GROUP BY DATE(created_at)
+    WHERE started_at >= ${startDate}
+    GROUP BY DATE(started_at)
     ORDER BY date ASC
   `;
-  // Convert bigint to number
   const data = result.map(row => ({ date: row.date, count: Number(row.count) }));
   res.json({ success: true, data });
 };
@@ -26,7 +25,7 @@ export const getTotalCoinsIssued = async (req: Request, res: Response) => {
   if (period === '24h') startDate.setHours(startDate.getHours() - 24);
   else if (period === '7d') startDate.setDate(startDate.getDate() - 7);
   else if (period === '30d') startDate.setDate(startDate.getDate() - 30);
-  else startDate = new Date(0); // all time
+  else startDate = new Date(0);
 
   const result = await prisma.coinTransaction.aggregate({
     where: {
