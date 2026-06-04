@@ -458,3 +458,20 @@ model AuditLog {
 
   @@map("audit_logs")
 }
+
+model Promotion {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type        String    @db.VarChar(20) // 'hero' or 'card'
+  title       String    @db.VarChar(200)
+  description String?   @db.Text
+  imageUrl    String?   @db.Text
+  accentColor String?   @db.VarChar(7)  // hex, e.g. '#FFD700'
+  ctaText     String?   @db.VarChar(50)
+  ctaLink     String?   @db.Text
+  sortOrder   Int       @default(0)
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("promotions")
+}
