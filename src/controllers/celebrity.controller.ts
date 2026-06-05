@@ -1,4 +1,3 @@
-// src/controllers/celebrity.controller.ts
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { redis } from '../lib/redis.js';
@@ -26,28 +25,13 @@ export const getAllCelebrities = async (req: Request, res: Response) => {
 
 export const getCelebrityNews = async (req: Request, res: Response) => {
   const slug = Array.isArray(req.params.slug) ? req.params.slug[0] : req.params.slug;
-  
-  const celebrity = await prisma.celebrity.findUnique({
-    where: { slug, isPublished: true },
-    select: { id: true, name: true, slug: true }
-  });
-  if (!celebrity) {
-    throw ApiError.notFound('Celebrity not found');
+  try {
+    const result = await refreshCelebrityNews(slug);
+    res.json(result);
+  } catch (err) {
+    console.error('News error:', err);
+    res.json({ celebrity: '', articles: [] });
   }
-
-  const cacheKey = `celebrity:news:${slug}`;
-  let news = await redis.get(cacheKey);
-  
-  if (!news) {
-    // Trigger refresh and return empty if none
-    const refreshedNews = await refreshCelebrityNews(slug);
-    if (!refreshedNews) {
-      return res.json({ success: true, celebrity: celebrity.name, articles: [] });
-    }
-    news = JSON.stringify(refreshedNews);
-  }
-  
-  res.json(typeof news === 'string' ? JSON.parse(news) : news);
 };
 
 export const getCelebrityEvents = async (req: Request, res: Response) => {
@@ -57,6 +41,7 @@ export const getCelebrityEvents = async (req: Request, res: Response) => {
     where: { slug, isPublished: true },
     select: { id: true, name: true }
   });
+  
   if (!celebrity) {
     throw ApiError.notFound('Celebrity not found');
   }
@@ -64,7 +49,7 @@ export const getCelebrityEvents = async (req: Request, res: Response) => {
   const events = await prisma.ticketListingCache.findMany({
     where: { 
       celebrityId: celebrity.id,
-      eventDate: { gt: new Date() } // Only future events
+      eventDate: { gt: new Date() }
     },
     orderBy: { eventDate: 'asc' },
     take: 20
