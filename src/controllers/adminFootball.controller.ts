@@ -2,6 +2,11 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { ApiError } from '../lib/apiError.js';
 
+function getParamId(param: string | string[] | undefined): string {
+  if (!param) throw new Error('Missing parameter');
+  return Array.isArray(param) ? param[0] : param;
+}
+
 export const getAllStars = async (req: Request, res: Response) => {
   const stars = await prisma.footballStar.findMany();
   res.json(stars);
@@ -13,7 +18,7 @@ export const createStar = async (req: Request, res: Response) => {
 };
 
 export const updateStar = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = getParamId(req.params.id);
   const star = await prisma.footballStar.update({
     where: { id },
     data: req.body,
@@ -22,7 +27,7 @@ export const updateStar = async (req: Request, res: Response) => {
 };
 
 export const deleteStar = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = getParamId(req.params.id);
   await prisma.footballStar.delete({ where: { id } });
   res.json({ success: true });
 };
@@ -33,7 +38,7 @@ export const getAllMatches = async (req: Request, res: Response) => {
 };
 
 export const updateMatch = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = getParamId(req.params.id);
   const match = await prisma.footballMatch.update({
     where: { id },
     data: req.body,
@@ -42,7 +47,7 @@ export const updateMatch = async (req: Request, res: Response) => {
 };
 
 export const deleteMatch = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = getParamId(req.params.id);
   await prisma.footballMatch.delete({ where: { id } });
   res.json({ success: true });
 };
