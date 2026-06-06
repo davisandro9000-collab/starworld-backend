@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { ApiError } from '../lib/apiError.js';
 
+// Helper to safely get a string parameter
 function getParamId(param: string | string[] | undefined): string {
   if (!param) throw new Error('Missing parameter');
   return Array.isArray(param) ? param[0] : param;
