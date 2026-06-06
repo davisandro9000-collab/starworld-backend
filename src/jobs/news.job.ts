@@ -5,10 +5,6 @@ const NEWS_API_KEY = process.env.NEWSAPI_KEY;
 const GNEWS_API_KEY = process.env.GNEWS_API_KEY;
 const BASE_URL = 'https://newsapi.org/v2';
 const GNEWS_URL = 'https://gnews.io/api/v4/search';
-const CACHE_TTL = 6 * 60 * 60 * 1000; // 6 hours in milliseconds
-
-// In‑memory cache (fallback if Redis fails)
-const memoryCache = new Map<string, { data: any; expiry: number }>();
 
 const logger = {
   info: (...args: any[]) => console.log('[NewsJob]', ...args),
@@ -58,63 +54,59 @@ async function fetchFromGNews(celebrityName: string) {
   }
 }
 
-// Helper to get from cache (Redis or memory)
-async function getCached(key: string) {
-  try {
-    const redisVal = await redis.get(key);
-    if (redisVal) return JSON.parse(redisVal);
-  } catch (err) {
-    logger.warn(`Redis get failed for ${key}, using memory cache`, err);
-    const mem = memoryCache.get(key);
-    if (mem && mem.expiry > Date.now()) return mem.data;
-  }
-  return null;
-}
-
-// Helper to set cache (Redis and memory)
-async function setCached(key: string, data: any, ttlSeconds: number) {
-  try {
-    await redis.setex(key, ttlSeconds, JSON.stringify(data));
-  } catch (err) {
-    logger.warn(`Redis set failed for ${key}, storing in memory`, err);
-  }
-  memoryCache.set(key, { data, expiry: Date.now() + ttlSeconds * 1000 });
-}
-
-export async function refreshCelebrityNews(celebritySlug: string, bypassCache = false) {
+// For celebrities
+export async function refreshCelebrityNews(celebritySlug: string) {
   try {
     const celebrity = await prisma.celebrity.findUnique({
       where: { slug: celebritySlug, isPublished: true },
       select: { name: true },
     });
     if (!celebrity) return null;
-
     const cacheKey = `celebrity:news:${celebritySlug}`;
-
-    if (!bypassCache) {
-      const cached = await getCached(cacheKey);
-      if (cached) {
-        logger.info(`Cache hit for ${celebrity.name}`);
-        return cached;
-      }
-    }
-
+    let cached = null;
+    try { cached = await redis.get(cacheKey); } catch {}
+    if (cached) return JSON.parse(cached);
     let articles = await fetchFromNewsAPI(celebrity.name);
     let source = 'NewsAPI';
-
     if (!articles.length && GNEWS_API_KEY) {
       articles = await fetchFromGNews(celebrity.name);
       source = 'GNews';
     }
-
     const result = { celebrity: celebrity.name, articles };
-    logger.info(`Fetched ${articles.length} articles for ${celebrity.name} from ${source}`);
-
-    await setCached(cacheKey, result, CACHE_TTL);
+    try { await redis.setex(cacheKey, 6 * 60 * 60, JSON.stringify(result)); } catch {}
+    logger.info(`Refreshed news for ${celebrity.name}: ${articles.length} articles from ${source}`);
     return result;
   } catch (err) {
     logger.error(`refreshCelebrityNews failed for ${celebritySlug}:`, err);
     return { celebrity: celebritySlug, articles: [] };
+  }
+}
+
+// For football stars
+export async function refreshFootballStarNews(starSlug: string) {
+  try {
+    const star = await prisma.footballStar.findUnique({
+      where: { slug: starSlug, isPublished: true },
+      select: { name: true },
+    });
+    if (!star) return null;
+    const cacheKey = `football:news:${starSlug}`;
+    let cached = null;
+    try { cached = await redis.get(cacheKey); } catch {}
+    if (cached) return JSON.parse(cached);
+    let articles = await fetchFromNewsAPI(star.name);
+    let source = 'NewsAPI';
+    if (!articles.length && GNEWS_API_KEY) {
+      articles = await fetchFromGNews(star.name);
+      source = 'GNews';
+    }
+    const result = { star: star.name, articles };
+    try { await redis.setex(cacheKey, 6 * 60 * 60, JSON.stringify(result)); } catch {}
+    logger.info(`Refreshed news for football star ${star.name}: ${articles.length} articles from ${source}`);
+    return result;
+  } catch (err) {
+    logger.error(`refreshFootballStarNews failed for ${starSlug}:`, err);
+    return { star: starSlug, articles: [] };
   }
 }
 
@@ -125,7 +117,7 @@ export async function startStaggeredNewsRefresh() {
     select: { slug: true },
   });
   for (const celeb of celebrities) {
-    await refreshCelebrityNews(celeb.slug, true); // bypass cache to force refresh
+    await refreshCelebrityNews(celeb.slug);
     await new Promise(resolve => setTimeout(resolve, 8 * 60 * 1000));
   }
 }

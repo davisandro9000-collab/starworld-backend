@@ -25,6 +25,8 @@ import adminPrizeRoutes from './routes/adminPrize.routes.js';
 import adminAuditRoutes from './routes/adminAudit.routes.js';
 import adminPromotionRoutes from './routes/adminPromotion.routes.js';
 import promotionRoutes from './routes/promotion.routes.js';
+import footballRoutes from './routes/football.routes.js';
+import adminFootballRoutes from './routes/adminFootball.routes.js';
 
 const createApp = () => {
   const app = express();
@@ -74,6 +76,9 @@ const createApp = () => {
   app.use('/api/admin/v1/audit', adminAuditRoutes);
   app.use('/api/admin/v1/promotions', adminPromotionRoutes);
   app.use('/api/v1/promotions', promotionRoutes);
+  app.use('/api/v1/football', footballRoutes);
+  app.use('/api/admin/v1/football', adminFootballRoutes);
+  
 
   // Test endpoint
   app.get('/api/v1/test', (req, res) => {
