@@ -1,4 +1,3 @@
-// src/controllers/adminDeposit.controller.ts
 import { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { ApiError } from '../lib/apiError.js';
@@ -8,7 +7,7 @@ import { TierService } from '../services/tier.service.js';
 import { ReferralService } from '../services/referral.service.js';
 import { NotificationService } from '../services/notification.service.js';
 import { z } from 'zod';
-import { v4 as uuidv4 } from 'uuid';   // used for referral idempotency key
+import { v4 as uuidv4 } from 'uuid';
 
 const idempotencyService = new IdempotencyService();
 const coinService = new CoinService(prisma, idempotencyService);
@@ -17,8 +16,8 @@ const referralService = new ReferralService(prisma, idempotencyService);
 const notificationService = new NotificationService(prisma);
 
 const creditDepositSchema = z.object({
-  usdValue: z.number().min(0.01),
-  coinsToAward: z.number().min(1)
+  coinsToAward: z.number().min(1),
+  usdValue: z.number().min(0.01).optional(),
 });
 
 function getParamId(param: string | string[] | undefined): string {
@@ -74,17 +73,24 @@ export const creditDeposit = async (req: Request, res: Response) => {
         return await prisma.$transaction(async (tx) => {
           const deposit = await tx.deposit.findUnique({
             where: { id: depositId },
-            select: { status: true, userId: true }
+            select: { status: true, userId: true, usdValue: true }
           });
           if (!deposit) throw ApiError.notFound('Deposit not found');
           if (deposit.status !== 'pending') {
             throw ApiError.badRequest(`Deposit already ${deposit.status}`);
           }
 
+          let finalUsdValue = usdValue ?? deposit.usdValue;
+          if (!finalUsdValue) {
+            // Fallback: calculate from coinsToAward using coin rate
+            const coinRate = parseInt(process.env.COIN_RATE || '3');
+            finalUsdValue = coinsToAward / coinRate;
+          }
+
           const updatedDeposit = await tx.deposit.update({
             where: { id: depositId },
             data: {
-              usdValue,
+              usdValue: finalUsdValue,
               coinsToAward,
               status: 'credited',
               verifiedById: adminId,
@@ -111,7 +117,7 @@ export const creditDeposit = async (req: Request, res: Response) => {
               balanceAfter: newBalance,
               type: 'admin_grant',
               referenceId: updatedDeposit.id,
-              note: `Deposit credit: $${usdValue} = ${coinsToAward} coins`,
+              note: `Deposit credit: $${finalUsdValue} = ${coinsToAward} coins`,
               idempotencyKey: idempotencyKey || undefined
             }
           });
@@ -133,22 +139,22 @@ export const creditDeposit = async (req: Request, res: Response) => {
 
   const deposit = result;
 
-  // Side effects (non‑blocking)
+  // Side effects
   try {
-    // Use a fresh UUID for referral activation to avoid length issues
     await referralService.activateReferral(deposit.userId, uuidv4());
     await tierService.checkAndUpgradeTier(deposit.userId);
     const user = await prisma.user.findUnique({ where: { id: deposit.userId } });
     if (user) {
+      const usdValueNum = deposit.usdValue ? Number(deposit.usdValue) : 0;
       await notificationService.notifyDepositCredited(
-        user.id, user.username, user.email, usdValue, coinsToAward
+        user.id, user.username, user.email, usdValueNum, coinsToAward
       );
     }
     if ((global as any).io) {
       (global as any).io.of('/user').to(`user:${deposit.userId}`).emit('notification', {
         type: 'deposit_credited',
         title: 'Deposit Verified!',
-        body: `$${usdValue} added → ${coinsToAward} coins credited`
+        body: `$${deposit.usdValue} added → ${coinsToAward} coins credited`
       });
       (global as any).io.of('/user').to(`user:${deposit.userId}`).emit('coin_update', { newBalance: user?.coinBalance });
     }

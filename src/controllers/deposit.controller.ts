@@ -1,37 +1,42 @@
 import { Request, Response } from 'express';
-import { DepositService } from '../services/deposit.service.js';
 import { prisma } from '../lib/prisma.js';
 import { ApiError } from '../lib/apiError.js';
 import { z } from 'zod';
 
-const depositService = new DepositService(prisma);
-
 const createDepositSchema = z.object({
   method: z.enum(['crypto', 'gift_card']),
   cryptoCurrency: z.enum(['BTC', 'ETH', 'USDT_TRC20', 'BNB']).optional(),
-  txHash: z.string().optional(),
+  walletAddressUsed: z.string().optional(),
+  usdValue: z.number().positive(),
   giftCardBrand: z.string().optional(),
   giftCardDigits: z.string().optional(),
-  giftCardAmountUsd: z.number().optional()
 });
 
 export const createDeposit = async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const idempotencyKey = req.idempotencyKey;
-  if (!idempotencyKey) {
-    throw ApiError.badRequest('Idempotency-Key header required');
-  }
+  if (!idempotencyKey) throw ApiError.badRequest('Idempotency-Key required');
 
   const validated = createDepositSchema.parse(req.body);
+  const coinRate = parseInt(process.env.COIN_RATE || '3');
+  const coinsToAward = Math.floor(validated.usdValue * coinRate);
 
-  const deposit = await depositService.createDeposit(
-    userId,
-    validated.method,
-    validated,
-    idempotencyKey
-  );
+  const deposit = await prisma.deposit.create({
+    data: {
+      userId,
+      method: validated.method,
+      usdValue: validated.usdValue,
+      coinsToAward,
+      cryptoCurrency: validated.cryptoCurrency,
+      walletAddressUsed: validated.walletAddressUsed,
+      giftCardBrand: validated.giftCardBrand,
+      giftCardDigits: validated.giftCardDigits,
+      status: 'pending',
+      idempotencyKey,
+    },
+  });
 
-  // Emit admin notification via Socket.IO
+  // Emit admin notification via socket
   const io = (global as any).io;
   if (io) {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { username: true } });
@@ -39,7 +44,7 @@ export const createDeposit = async (req: Request, res: Response) => {
       depositId: deposit.id,
       username: user?.username,
       method: deposit.method,
-      amount: deposit.giftCardAmountUsd || deposit.cryptoCurrency || 'crypto',
+      amount: deposit.usdValue,
     });
   }
 
@@ -47,7 +52,10 @@ export const createDeposit = async (req: Request, res: Response) => {
 };
 
 export const getDepositAddresses = async (req: Request, res: Response) => {
-  const addresses = await depositService.getDepositAddresses();
+  const addresses = await prisma.depositAddress.findMany({
+    where: { isActive: true },
+    orderBy: { sortOrder: 'asc' },
+  });
   res.json({ success: true, addresses });
 };
 
@@ -55,6 +63,13 @@ export const getDepositHistory = async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const page = parseInt(req.query.page as string) || 1;
   const limit = parseInt(req.query.limit as string) || 10;
-  const result = await depositService.getUserDeposits(userId, page, limit);
-  res.json({ success: true, ...result });
+  const skip = (page - 1) * limit;
+  const deposits = await prisma.deposit.findMany({
+    where: { userId },
+    orderBy: { createdAt: 'desc' },
+    skip,
+    take: limit,
+  });
+  const total = await prisma.deposit.count({ where: { userId } });
+  res.json({ success: true, deposits, total, page, totalPages: Math.ceil(total / limit) });
 };

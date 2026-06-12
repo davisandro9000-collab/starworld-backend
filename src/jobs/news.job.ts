@@ -82,33 +82,7 @@ export async function refreshCelebrityNews(celebritySlug: string) {
   }
 }
 
-// For football stars
-export async function refreshFootballStarNews(starSlug: string) {
-  try {
-    const star = await prisma.footballStar.findUnique({
-      where: { slug: starSlug, isPublished: true },
-      select: { name: true },
-    });
-    if (!star) return null;
-    const cacheKey = `football:news:${starSlug}`;
-    let cached = null;
-    try { cached = await redis.get(cacheKey); } catch {}
-    if (cached) return JSON.parse(cached);
-    let articles = await fetchFromNewsAPI(star.name);
-    let source = 'NewsAPI';
-    if (!articles.length && GNEWS_API_KEY) {
-      articles = await fetchFromGNews(star.name);
-      source = 'GNews';
-    }
-    const result = { star: star.name, articles };
-    try { await redis.setex(cacheKey, 6 * 60 * 60, JSON.stringify(result)); } catch {}
-    logger.info(`Refreshed news for football star ${star.name}: ${articles.length} articles from ${source}`);
-    return result;
-  } catch (err) {
-    logger.error(`refreshFootballStarNews failed for ${starSlug}:`, err);
-    return { star: starSlug, articles: [] };
-  }
-}
+// Football news is handled by footballNewsSync.job.ts – no longer needed here.
 
 export async function startStaggeredNewsRefresh() {
   logger.info('Starting staggered celebrity news refresh job');

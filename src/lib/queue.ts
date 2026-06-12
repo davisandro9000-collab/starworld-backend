@@ -3,6 +3,7 @@ import { Queue, Worker } from 'bullmq';
 import { redisConnection } from './redis.js';
 import { syncTicketmasterEvents } from '../jobs/tickets.job.js';
 import { startStaggeredNewsRefresh } from '../jobs/news.job.js';
+import { syncWorldCupData } from '../jobs/footballSync.job.js';
 
 const logger = {
   info: (...args: any[]) => console.log('[Queue]', ...args),
@@ -13,6 +14,7 @@ const logger = {
 // Queues
 export const ticketsQueue = new Queue('tickets-sync', { connection: redisConnection });
 export const newsQueue = new Queue('news-refresh', { connection: redisConnection });
+export const footballSyncQueue = new Queue('football-sync', { connection: redisConnection });
 
 // Workers
 new Worker('tickets-sync', async (job) => {
@@ -23,6 +25,11 @@ new Worker('tickets-sync', async (job) => {
 new Worker('news-refresh', async (job) => {
   logger.info(`Running staggered news refresh`);
   await startStaggeredNewsRefresh();
+}, { connection: redisConnection });
+
+new Worker('football-sync', async (job) => {
+  logger.info('Running World Cup data sync');
+  await syncWorldCupData();
 }, { connection: redisConnection });
 
 // Schedule jobs
@@ -47,6 +54,17 @@ export async function scheduleJobs() {
       logger.info('✅ Scheduled news refresh job (staggered)');
     } else {
       logger.warn('⚠️ NEWSAPI_KEY not set, skipping news refresh');
+    }
+
+    if (process.env.FOOTBALL_API_KEY) {
+      await footballSyncQueue.add('sync', {}, {
+        repeat: { pattern: '0 */6 * * *' },
+        removeOnComplete: true,
+        removeOnFail: false
+      });
+      logger.info('✅ Scheduled World Cup data sync (every 6 hours)');
+    } else {
+      logger.warn('⚠️ FOOTBALL_API_KEY not set, skipping football sync');
     }
     
   } catch (error) {

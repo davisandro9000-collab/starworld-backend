@@ -54,7 +54,10 @@ model User {
   ticketGameSessionsWinner  TicketGameSession[] @relation("Winner")
 
   // Football section
-  footballPredictions    FootballPrediction[]   // <-- ADDED THIS LINE
+  footballPredictions    FootballPrediction[]
+  footballPredictionEntries   FootballPredictionEntry[]
+  footballTicketListingsAsSeller FootballTicketListing[] @relation("FootballTicketSeller")
+  footballTicketListingsAsBuyer  FootballTicketListing[] @relation("FootballTicketBuyer")
 
   @@map("users")
 }
@@ -146,7 +149,7 @@ model CoinTransaction {
   id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId         String   @map("user_id") @db.Uuid
   user           User     @relation(fields: [userId], references: [id])
-  amount         Int      // positive = credit, negative = debit
+  amount         Int
   balanceAfter   Int      @map("balance_after")
   type           String   @db.VarChar(30) // admin_grant, game_win, referral_bonus, ticket_purchase, etc.
   referenceId    String?  @map("reference_id") @db.Uuid
@@ -220,7 +223,7 @@ model TriviaQuestion {
   celebrityId   String    @map("celebrity_id") @db.Uuid
   celebrity     Celebrity @relation(fields: [celebrityId], references: [id])
   question      String    @db.Text
-  options       Json      // array of 4 strings
+  options       Json
   correctIndex  Int       @map("correct_index")
   difficulty    String    @default("medium") @db.VarChar(10)
   isActive      Boolean   @default(true) @map("is_active")
@@ -234,7 +237,7 @@ model Prize {
   label        String    @db.VarChar(100)
   type         String    @db.VarChar(20) // cash, merch, ticket, coupon, coins
   coinValue    Int?      @map("coin_value")
-  tierSlug     String?   @map("tier_slug") @db.VarChar(20) // NULL = all tiers eligible
+  tierSlug     String?   @map("tier_slug") @db.VarChar(20)
   isActive     Boolean   @default(true) @map("is_active")
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
 
@@ -436,7 +439,7 @@ model Announcement {
   id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   title        String    @db.VarChar(200)
   body         String    @db.Text
-  tierTarget   String?   @map("tier_target") @db.VarChar(20) // NULL = all tiers
+  tierTarget   String?   @map("tier_target") @db.VarChar(20)
   scheduledAt  DateTime? @map("scheduled_at") @db.Timestamptz
   publishedAt  DateTime? @map("published_at") @db.Timestamptz
   createdBy    String?   @map("created_by") @db.Uuid
@@ -468,7 +471,7 @@ model Promotion {
   title       String    @db.VarChar(200)
   description String?   @db.Text
   imageUrl    String?   @db.Text
-  accentColor String?   @db.VarChar(7)  // hex, e.g. '#FFD700'
+  accentColor String?   @db.VarChar(7)
   ctaText     String?   @db.VarChar(50)
   ctaLink     String?   @db.Text
   sortOrder   Int       @default(0)
@@ -480,65 +483,193 @@ model Promotion {
 }
 
 // ============================================
-// FOOTBALL SECTION
+// FOOTBALL SECTION – World Cup Teams & Players
 // ============================================
 
-model FootballStar {
+model FootballTeam {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalId      String?  @unique @map("external_id")
+  name            String   @unique @db.VarChar(100)
+  slug            String   @unique @db.VarChar(100)
+  flagUrl         String?  @map("flag_url") @db.Text
+  group           String?  @db.VarChar(10)
+  coach           String?  @db.VarChar(100)
+  worldRanking    Int?     @map("world_ranking")
+  participations  Int?
+  description     String?  @db.Text
+  isPublished     Boolean  @default(true) @map("is_published")
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  players         FootballPlayer[]
+  homeMatches     FootballMatch[] @relation("HomeTeam")
+  awayMatches     FootballMatch[] @relation("AwayTeam")
+  wonMatches      FootballMatch[] @relation("Winner")
+  predictions     FootballPrediction[]
+  
+  // Opposite relations for new features
+  predictedInEntries  FootballPredictionEntry[] @relation("PredictedTeam")
+  news                FootballNews[]
+
+  @@map("football_teams")
+}
+
+model FootballPlayer {
   id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalId  String?  @unique @map("external_id")
+  teamId      String   @map("team_id") @db.Uuid
+  team        FootballTeam @relation(fields: [teamId], references: [id])
   name        String   @db.VarChar(100)
-  slug        String   @unique @db.VarChar(100)
-  nationality String?  @db.VarChar(50)
-  club        String?  @db.VarChar(100)
-  bio         String?  @db.Text
-  avatarUrl   String?  @map("avatar_url") @db.Text
-  bannerUrl   String?  @map("banner_url") @db.Text
+  position    String?  @db.VarChar(20)
+  number      Int?
+  goals       Int      @default(0)
+  assists     Int      @default(0)
+  imageUrl    String?  @map("image_url") @db.Text
   isPublished Boolean  @default(true) @map("is_published")
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
   updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
 
-  matches     FootballMatch[]
-  predictions FootballPrediction[]
+  predictedInEntries  FootballPredictionEntry[] @relation("PredictedPlayer")
 
-  @@map("football_stars")
+  @@map("football_players")
 }
 
 model FootballMatch {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  externalId    String?  @unique @map("external_id") @db.VarChar(100)   // from external API
-  homeTeam      String   @map("home_team") @db.VarChar(100)
-  awayTeam      String   @map("away_team") @db.VarChar(100)
-  matchDate     DateTime @map("match_date") @db.Timestamptz
-  venue         String?  @db.VarChar(200)
-  tournament    String   @db.VarChar(50)   // e.g., "World Cup 2026", "UCL"
-  status        String   @default("upcoming") @db.VarChar(20) // upcoming, live, finished
-  homeScore     Int?     @map("home_score")
-  awayScore     Int?     @map("away_score")
-  winnerId      String?  @map("winner_id") @db.Uuid
-  winner        FootballStar? @relation(fields: [winnerId], references: [id])
-  ticketUrl     String?  @map("ticket_url") @db.Text
-  ticketPriceMin Decimal? @map("ticket_price_min") @db.Decimal(10,2)
-  isPublished   Boolean  @default(true) @map("is_published")
-  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  externalId      String?       @unique @map("external_id")
+  homeTeamId      String        @map("home_team_id") @db.Uuid
+  homeTeam        FootballTeam  @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeamId      String        @map("away_team_id") @db.Uuid
+  awayTeam        FootballTeam  @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  matchDate       DateTime      @map("match_date") @db.Timestamptz
+  venue           String?       @db.VarChar(200)
+  tournament      String        @db.VarChar(50)
+  status          String        @default("upcoming") @db.VarChar(20)
+  homeScore       Int?          @map("home_score")
+  awayScore       Int?          @map("away_score")
+  winnerId        String?       @map("winner_id") @db.Uuid
+  winner          FootballTeam? @relation("Winner", fields: [winnerId], references: [id])
+  ticketUrl       String?       @map("ticket_url") @db.Text
+  ticketPriceMin  Decimal?      @map("ticket_price_min") @db.Decimal(10,2)
+  isPublished     Boolean       @default(true) @map("is_published")
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime      @updatedAt @map("updated_at") @db.Timestamptz
 
-  predictions   FootballPrediction[]
+  predictions     FootballPrediction[]
+  
+  // New relations
+  predictionGames  FootballPredictionGame[] @relation("GameMatch")
+  ticketListings   FootballTicketListing[]
 
   @@map("football_matches")
 }
 
 model FootballPrediction {
-  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId            String   @map("user_id") @db.Uuid
-  user              User     @relation(fields: [userId], references: [id])
-  matchId           String   @map("match_id") @db.Uuid
-  match             FootballMatch @relation(fields: [matchId], references: [id])
-  predictedWinnerId String?  @map("predicted_winner_id") @db.Uuid
-  predictedWinner   FootballStar? @relation(fields: [predictedWinnerId], references: [id])
-  predictedScore    String?  @map("predicted_score") @db.VarChar(10)   // e.g., "2-1"
-  pointsEarned      Int      @default(0) @map("points_earned")
-  isCorrect         Boolean  @default(false) @map("is_correct")
-  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId            String         @map("user_id") @db.Uuid
+  user              User           @relation(fields: [userId], references: [id])
+  matchId           String         @map("match_id") @db.Uuid
+  match             FootballMatch  @relation(fields: [matchId], references: [id])
+  predictedWinnerId String?        @map("predicted_winner_id") @db.Uuid
+  predictedWinner   FootballTeam?  @relation(fields: [predictedWinnerId], references: [id])
+  predictedScore    String?        @map("predicted_score") @db.VarChar(10)
+  pointsEarned      Int            @default(0) @map("points_earned")
+  isCorrect         Boolean        @default(false) @map("is_correct")
+  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz
 
   @@unique([userId, matchId])
   @@map("football_predictions")
+}
+
+// ============================================
+// FOOTBALL PREDICTION GAMES (advanced)
+// ============================================
+
+model FootballPredictionGame {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   @db.VarChar(200)
+  description     String?  @db.Text
+  predictionType  String   @db.VarChar(30)
+  matchId         String?  @map("match_id") @db.Uuid
+  match           FootballMatch? @relation("GameMatch", fields: [matchId], references: [id])
+  points          Int      @default(10)
+  coinReward      Int      @default(0)
+  cashReward      Decimal? @db.Decimal(10,2)
+  isActive        Boolean  @default(true)
+  startsAt        DateTime @map("starts_at") @db.Timestamptz
+  endsAt          DateTime @map("ends_at") @db.Timestamptz
+  resolvedAt      DateTime? @map("resolved_at") @db.Timestamptz
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  entries         FootballPredictionEntry[]
+
+  @@map("football_prediction_games")
+}
+
+model FootballPredictionEntry {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  gameId            String   @map("game_id") @db.Uuid
+  game              FootballPredictionGame @relation(fields: [gameId], references: [id])
+  userId            String   @map("user_id") @db.Uuid
+  user              User     @relation(fields: [userId], references: [id])
+  predictedTeamId   String?  @map("predicted_team_id") @db.Uuid
+  predictedTeam     FootballTeam? @relation("PredictedTeam", fields: [predictedTeamId], references: [id])
+  predictedPlayerId String?  @map("predicted_player_id") @db.Uuid
+  predictedPlayer   FootballPlayer? @relation("PredictedPlayer", fields: [predictedPlayerId], references: [id])
+  predictedStage    String?  @db.VarChar(50)
+  predictedValue    String?  @map("predicted_value") @db.VarChar(50)
+  isCorrect         Boolean  @default(false)
+  pointsEarned      Int      @default(0)
+  coinEarned        Int      @default(0)
+  cashEarned        Decimal? @db.Decimal(10,2)
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@unique([gameId, userId])
+  @@index([userId])
+  @@map("football_prediction_entries")
+}
+
+// ============================================
+// FOOTBALL NEWS (per team)
+// ============================================
+
+model FootballNews {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  teamId      String?  @map("team_id") @db.Uuid
+  team        FootballTeam? @relation(fields: [teamId], references: [id])
+  title       String   @db.VarChar(300)
+  content     String?  @db.Text
+  source      String?  @db.VarChar(100)
+  url         String?  @db.Text
+  imageUrl    String?  @map("image_url") @db.Text
+  publishedAt DateTime @map("published_at") @db.Timestamptz
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  @@index([teamId, publishedAt])
+  @@map("football_news")
+}
+
+// ============================================
+// FOOTBALL TICKET RESALE (admin-created)
+// ============================================
+
+model FootballTicketListing {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  matchId        String   @map("match_id") @db.Uuid
+  match          FootballMatch @relation(fields: [matchId], references: [id])
+  sellerId       String   @map("seller_id") @db.Uuid
+  seller         User     @relation("FootballTicketSeller", fields: [sellerId], references: [id])
+  priceCoins     Int      @map("price_coins")
+  seatInfo       String?  @map("seat_info") @db.VarChar(200)
+  ticketImageUrl String?  @map("ticket_image_url") @db.Text
+  status         String   @default("active") @db.VarChar(20)
+  buyerId        String?  @map("buyer_id") @db.Uuid
+  buyer          User?    @relation("FootballTicketBuyer", fields: [buyerId], references: [id])
+  soldAt         DateTime? @map("sold_at") @db.Timestamptz
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz
+  expiresAt      DateTime @map("expires_at") @db.Timestamptz
+
+  @@index([matchId, status])
+  @@map("football_ticket_listings")
 }
