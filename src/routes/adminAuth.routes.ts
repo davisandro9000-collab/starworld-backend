@@ -11,7 +11,7 @@ router.post('/login', adminLogin);
 // Protected routes (require admin token)
 router.get('/me', adminAuthMiddleware, adminGetMe);
 
-// Optional: logout – client-side only, but we can provide a no-op endpoint
+// Optional logout (client-side)
 router.post('/logout', (req, res) => {
   res.json({ success: true });
 });
