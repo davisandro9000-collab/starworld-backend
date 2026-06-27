@@ -6,6 +6,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  
 }
 
 // ============================================
@@ -544,6 +545,8 @@ model FootballMatch {
   matchDate       DateTime      @map("match_date") @db.Timestamptz
   venue           String?       @db.VarChar(200)
   tournament      String        @db.VarChar(50)
+  stage           String?       @db.VarChar(20)   // group, round_of_32, round_of_16, quarter_final, semi_final, final, third_place
+  round           Int?                           // group stage round number or knockout round number
   status          String        @default("upcoming") @db.VarChar(20)
   homeScore       Int?          @map("home_score")
   awayScore       Int?          @map("away_score")

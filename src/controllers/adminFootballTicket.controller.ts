@@ -5,15 +5,28 @@ import { ApiError } from '../lib/apiError.js';
 
 export const createTicketListing = async (req: Request, res: Response) => {
   const { matchId, priceCoins, seatInfo, ticketImageUrl, expiresAt } = req.body;
-  const match = await prisma.footballMatch.findUnique({ where: { id: matchId } });
+  
+  // Validate match
+  const match = await prisma.footballMatch.findUnique({
+    where: { id: matchId },
+  });
   if (!match) throw ApiError.notFound('Match not found');
   
-  // If admin user is not available, use a fallback admin ID (first admin in DB)
-  let sellerId = req.admin?.id;
-  if (!sellerId) {
-    const firstAdmin = await prisma.adminUser.findFirst();
-    sellerId = firstAdmin?.id;
-    if (!sellerId) throw ApiError.internal('No admin user found');
+  // Parse expiresAt – ensure it's a valid date
+  const expiresAtDate = new Date(expiresAt);
+  if (isNaN(expiresAtDate.getTime())) {
+    console.error('❌ Invalid expiresAt:', expiresAt);
+    throw ApiError.badRequest('Invalid expiresAt date');
+  }
+  
+  // Get seller ID (admin)
+  let sellerId: string;
+  if (req.admin?.id) {
+    sellerId = req.admin.id;
+  } else {
+    const adminUser = await prisma.adminUser.findFirst();
+    if (!adminUser) throw ApiError.internal('No admin user found');
+    sellerId = adminUser.id;
   }
   
   const listing = await prisma.footballTicketListing.create({
@@ -22,10 +35,13 @@ export const createTicketListing = async (req: Request, res: Response) => {
       priceCoins,
       seatInfo,
       ticketImageUrl,
-      expiresAt: new Date(expiresAt),
+      expiresAt: expiresAtDate,
       sellerId,
+      status: 'active',
     },
   });
+  
+  console.log(`✅ Ticket listing created: ${listing.id} for match ${matchId}`);
   res.status(201).json({ success: true, listing });
 };
 
@@ -43,5 +59,5 @@ export const cancelListing = async (req: Request, res: Response) => {
     where: { id },
     data: { status: 'cancelled' },
   });
-  res.json({ success: true });
+  res.json({ success: true, listing: { id, status: 'cancelled' } });
 };

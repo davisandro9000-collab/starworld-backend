@@ -7,7 +7,7 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Seeding database...');
 
-  // Seed Tiers
+  // --- Seed Tiers ---
   console.log('📊 Seeding tiers...');
   
   const bronze = await prisma.tier.upsert({
@@ -67,7 +67,7 @@ async function main() {
   });
   console.log(`  ✅ Created tier: ${platinum.name}`);
 
-  // Seed Admin User
+  // --- Seed Admin User ---
   console.log('👑 Seeding admin user...');
   const adminPassword = await bcrypt.hash('admin123', 12);
   
@@ -83,7 +83,7 @@ async function main() {
   });
   console.log(`  ✅ Created admin: ${admin.email} (password: admin123)`);
 
-  // Seed Sample Celebrities
+  // --- Seed Celebrities ---
   console.log('⭐ Seeding celebrities...');
   
   const celebrities = [
@@ -111,7 +111,7 @@ async function main() {
   }
   console.log(`  ✅ Created ${celebrities.length} celebrities`);
 
-  // Seed some deposit addresses
+  // --- Seed Deposit Addresses (create only, no upsert needed) ---
   console.log('🏦 Seeding deposit addresses...');
   
   const depositAddresses = [
@@ -125,18 +125,11 @@ async function main() {
     { method: 'steam', address: null, sortOrder: 8 },
   ];
 
-  for (const addr of depositAddresses) {
-    await prisma.depositAddress.upsert({
-      where: { id: `${addr.method}-id` },
-      update: {},
-      create: {
-        method: addr.method,
-        address: addr.address,
-        isActive: true,
-        sortOrder: addr.sortOrder,
-      },
-    });
-  }
+  // Use createMany with skipDuplicates to avoid errors if they already exist
+  await prisma.depositAddress.createMany({
+    data: depositAddresses,
+    skipDuplicates: true,
+  });
   console.log(`  ✅ Created ${depositAddresses.length} deposit addresses`);
 
   console.log('\n🎉 Seeding complete!');

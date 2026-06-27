@@ -60,13 +60,15 @@ function getCountryCode(teamId: string): string {
   return fullMap[teamId] || teamId.slice(0, 2).toUpperCase();
 }
 
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 async function main() {
   console.log('🌍 Seeding World Cup 2026 data from worldcup.json...');
 
   // Read JSON file
   const jsonPath = path.join(process.cwd(), 'data', 'worldcup.json');
   const rawData = await fs.readFile(jsonPath, 'utf-8');
-  const teamsData = JSON.parse(rawData); // array of team objects
+  const teamsData = JSON.parse(rawData);
 
   // Clear existing football data
   console.log('Clearing existing football data...');
@@ -76,12 +78,12 @@ async function main() {
   await prisma.footballTeam.deleteMany();
   console.log('Cleared.');
 
-  // Insert teams and collect mapping from original id to database id
-  const teamIdMap = new Map(); // externalId (original id) -> internal id
+  // Insert teams
+  const teamIdMap = new Map();
   for (const team of teamsData) {
     const countryCode = getCountryCode(team.id);
     const flagUrl = `https://flagsapi.com/${countryCode}/flat/64.png`;
-    const slug = team.id; // e.g., "canada", "usa"
+    const slug = team.id;
 
     const created = await prisma.footballTeam.create({
       data: {
@@ -100,35 +102,55 @@ async function main() {
     console.log(`✅ Team: ${team.name} (${team.id})`);
   }
 
-  // Insert players
+  // Insert players in bulk (createMany) with retries
   let playerCount = 0;
   for (const team of teamsData) {
     const teamInternalId = teamIdMap.get(team.id);
     if (!teamInternalId) {
-      console.warn(`⚠️ Team ${team.id} not found in map, skipping players`);
+      console.warn(`⚠️ Team ${team.id} not found, skipping players`);
       continue;
     }
-    for (const player of team.players) {
-      await prisma.footballPlayer.create({
-        data: {
-          name: player.name,
-          position: player.position || null,
-          number: null, // jersey numbers not provided in JSON
-          teamId: teamInternalId,
-          goals: 0,
-          assists: 0,
-          isPublished: true,
-        },
-      });
-      playerCount++;
+
+    const playersData = team.players.map((p: any) => ({
+      name: p.name,
+      position: p.position || null,
+      number: null,
+      teamId: teamInternalId,
+      goals: 0,
+      assists: 0,
+      isPublished: true,
+    }));
+
+    let success = false;
+    let attempts = 0;
+    while (!success && attempts < 3) {
+      try {
+        await prisma.footballPlayer.createMany({
+          data: playersData,
+          skipDuplicates: true,
+        });
+        success = true;
+        console.log(`   Added ${playersData.length} players for ${team.name}`);
+        playerCount += playersData.length;
+      } catch (err) {
+        attempts++;
+        console.error(`   Retry ${attempts} for ${team.name}:`, err);
+        if (attempts < 3) {
+          await delay(2000); // wait 2 seconds before retry
+        } else {
+          console.error(`   Failed to insert players for ${team.name} after 3 attempts.`);
+          throw err;
+        }
+      }
     }
-    console.log(`   Added ${team.players.length} players for ${team.name}`);
+    // Small delay between teams to avoid Neon throttling
+    await delay(500);
   }
 
   console.log(`✅ Seeding complete!`);
   console.log(`   Teams: ${teamsData.length}`);
   console.log(`   Players: ${playerCount}`);
-  console.log(`   Note: Matches not seeded yet – you can add them later.`);
+  console.log(`   Note: Matches not seeded yet – run seedGroupMatches.ts separately.`);
 }
 
 main()

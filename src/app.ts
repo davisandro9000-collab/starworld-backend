@@ -28,6 +28,10 @@ import footballPredictionRoutes from './routes/footballPrediction.routes.js';
 import adminFootballPredictionRoutes from './routes/adminFootballPrediction.routes.js';
 import footballTicketResaleRoutes from './routes/footballTicketResale.routes.js';
 import adminFootballTicketRoutes from './routes/adminFootballTicket.routes.js';
+// ⭐ NEW: Promotion routes
+import adminPromotionRoutes from './routes/adminPromotion.routes.js';
+import promotionRoutes from './routes/promotion.routes.js';
+import adminTournamentRoutes from './routes/adminTournament.routes.js';
 
 const createApp = () => {
   const app = express();
@@ -60,7 +64,6 @@ const createApp = () => {
   app.use('/api/v1/auth', authRoutes);
   app.use('/api/admin/v1/auth', adminAuthRoutes);
   app.use('/api/v1/deposits', depositRoutes);
-  // CRITICAL FIX: must be /api/admin/v1/deposits to match frontend
   app.use('/api/admin/v1/deposits', adminDepositRoutes);
   app.use('/api/v1/users', userRoutes);
   app.use('/api/admin/v1/users', adminUserRoutes);
@@ -82,6 +85,11 @@ const createApp = () => {
   app.use('/api/admin/v1/football/predictions', adminFootballPredictionRoutes);
   app.use('/api/v1/football/tickets', footballTicketResaleRoutes);
   app.use('/api/admin/v1/football/tickets', adminFootballTicketRoutes);
+  app.use('/api/admin/v1/tournament', adminTournamentRoutes);
+
+  // ⭐ NEW: Promotion routes (public + admin)
+  app.use('/api/v1/promotions', promotionRoutes);
+  app.use('/api/admin/v1/promotions', adminPromotionRoutes);
 
   // Test endpoint
   app.get('/api/v1/test', (req, res) => {

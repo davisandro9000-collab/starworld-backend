@@ -91,13 +91,24 @@ export const getActivePredictionGames = async (req: Request, res: Response) => {
 export const submitPredictionEntry = async (req: Request, res: Response) => {
   const userId = req.user!.id;
   const { gameId, predictedTeamId, predictedPlayerId, predictedStage, predictedValue } = req.body;
+  
   // Make idempotency key case‑insensitive
   const idempotencyKey = (req.headers['idempotency-key'] || req.headers['Idempotency-Key']) as string;
-  if (!idempotencyKey) throw ApiError.badRequest('Idempotency-Key required');
+  if (!idempotencyKey) {
+    console.error('❌ Missing idempotency key');
+    throw ApiError.badRequest('Idempotency-Key required');
+  }
 
   const game = await prisma.footballPredictionGame.findUnique({ where: { id: gameId } });
-  if (!game) throw ApiError.notFound('Game not found');
-  if (game.endsAt < new Date()) throw ApiError.badRequest('Game closed');
+  if (!game) {
+    console.error(`❌ Game not found: ${gameId}`);
+    throw ApiError.notFound('Game not found');
+  }
+  
+  if (game.endsAt < new Date()) {
+    console.error(`❌ Game ${gameId} ended at ${game.endsAt}, now is ${new Date()}`);
+    throw ApiError.badRequest('Game closed');
+  }
 
   const existing = await prisma.footballPredictionEntry.findUnique({
     where: { gameId_userId: { gameId, userId } },
@@ -114,6 +125,7 @@ export const submitPredictionEntry = async (req: Request, res: Response) => {
       predictedValue,
     },
   });
+  console.log(`✅ Prediction entry created for user ${userId}, game ${gameId}`);
   res.status(201).json({ success: true, entry });
 };
 

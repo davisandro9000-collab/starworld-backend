@@ -48,10 +48,10 @@ httpServer.listen(PORT, () => {
   scheduleJobs().catch(console.error);
   
   // Optional: Run one manual sync after 10 seconds for immediate testing
-  setTimeout(async () => {
-    console.log('🔁 Running manual Ticketmaster sync for initial data...');
-    await syncTicketmasterEvents();
-  }, 10000);
+  //setTimeout(async () => {
+  //  console.log('🔁 Running manual Ticketmaster sync for initial data...');
+  //  await syncTicketmasterEvents();
+ // }, 10000);
 });
 
 // Auction resolver (runs every 30 seconds)
