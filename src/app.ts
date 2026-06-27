@@ -95,6 +95,13 @@ const createApp = () => {
   app.get('/api/v1/test', (req, res) => {
     res.json({ message: 'StarWorld API is running!' });
   });
+  // Debug: list all routes
+app.get('/debug-routes', (req, res) => {
+  const routes = app._router.stack
+    .filter(r => r.route)
+    .map(r => r.route.path);
+  res.json(routes);
+});
 
   // 404 handler – must be last
   app.use((req, res) => {
